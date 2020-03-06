@@ -20,10 +20,10 @@ To train the model:
 ```bash
 dataset=data_name
 model_name=model_name
-CUDA_VISIBLE_DEVICES=2 python  train.py -data data/${dataset}/${dataset} \
+CUDA_VISIBLE_DEVICES=0 python  train.py -data data/${dataset}/${dataset} \
                  -save_model experiments/${dataset}_${model_name} \
                  -gpu_ranks 0 -save_checkpoint_steps 1  -keep_checkpoint 16 \
-                 -train_steps 2 -valid_steps 1 -report_every 1 -param_init 0  -param_init_glorot \
+                 -train_steps 200000 -valid_steps 1000 -report_every 500 -param_init 0  -param_init_glorot \
                  -batch_size 64 -batch_type sents -normalization sents -max_grad_norm 0  -accum_count 4 \
                  -optim adam -adam_beta1 0.9 -adam_beta2 0.998 -decay_method noam -warmup_steps 8000  \
                  -learning_rate 2 -label_smoothing 0.0 \
@@ -34,7 +34,7 @@ CUDA_VISIBLE_DEVICES=2 python  train.py -data data/${dataset}/${dataset} \
 
 To translate:
 ```bash
-python translate.py -model experiments/${dataset}_${model_name}/models/model_step_3.pt -src data/${dataset}/src-test.txt -output_dir experiments/${dataset}_${model_name}/preds/ -replace_unk -beam_size=10 -batch_size=30 -n_best=10 -gpu 0 -log_probs -n_translate_latent 2
+python translate.py -model experiments/${dataset}_${model_name}/models/model_step_3.pt -src data/${dataset}/src-test.txt -output_dir experiments/${dataset}_${model_name}/preds/ -replace_unk -beam_size=10 -batch_size=100 -n_best=10 -gpu 0 -log_probs -n_translate_latent 0
 ```
 
 To test the output results:
