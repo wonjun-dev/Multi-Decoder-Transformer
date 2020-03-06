@@ -22,7 +22,7 @@ dataset=data_name
 model_name=model_name
 CUDA_VISIBLE_DEVICES=0 python  train.py -data data/${dataset}/${dataset} \
                  -save_model experiments/${dataset}_${model_name} \
-                 -gpu_ranks 0 -save_checkpoint_steps 1  -keep_checkpoint 16 \
+                 -gpu_ranks 0 -save_checkpoint_steps 1000  -keep_checkpoint 16 \
                  -train_steps 200000 -valid_steps 1000 -report_every 500 -param_init 0  -param_init_glorot \
                  -batch_size 64 -batch_type sents -normalization sents -max_grad_norm 0  -accum_count 4 \
                  -optim adam -adam_beta1 0.9 -adam_beta2 0.998 -decay_method noam -warmup_steps 8000  \
