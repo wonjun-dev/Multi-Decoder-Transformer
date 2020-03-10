@@ -11,13 +11,18 @@ class NMTModel(nn.Module):
       encoder (onmt.encoders.EncoderBase): an encoder object
       decoder (onmt.decoders.DecoderBase): a decoder object
     """
-
     def __init__(self, encoder, decoder):
         super(NMTModel, self).__init__()
         self.encoder = encoder
         self.decoder = decoder
 
-    def forward(self, src, tgt, lengths, bptt=False, latent_input=None, segment_input=None):
+    def forward(self,
+                src,
+                tgt,
+                lengths,
+                bptt=False,
+                latent_input=None,
+                segment_input=None):
         """Forward propagate a `src` and `tgt` pair for training.
         Possible initialized with a beginning decoder state.
 
@@ -40,10 +45,17 @@ class NMTModel(nn.Module):
         tgt = tgt[:-1]  # exclude last target from inputs
 
         enc_state, memory_bank, lengths = self.encoder(src, lengths)
+        print(enc_state.shape)
+        print(memory_bank.shape)
+        print(lengths)
+        input()
         if bptt is False:
             self.decoder.init_state(src, memory_bank, enc_state)
-        dec_out, attns = self.decoder(
-            tgt, memory_bank, memory_lengths=lengths, latent_input=latent_input, segment_input=segment_input)
+        dec_out, attns = self.decoder(tgt,
+                                      memory_bank,
+                                      memory_lengths=lengths,
+                                      latent_input=latent_input,
+                                      segment_input=segment_input)
         return dec_out, attns
 
     def update_dropout(self, dropout):

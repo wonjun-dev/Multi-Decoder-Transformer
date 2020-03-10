@@ -39,7 +39,10 @@ def match_smiles_lists(pred_list, target_list, beam_size, should_print=True):
 
         beam_matched = False
         prev_sets = []
+        num_repeat = 0
+        num_invalid = 0
         for beam_idx, pred_smiles in enumerate(pred_beam):
+            cnt_flag = False
             pred_set = set(
                 data_utils.canonicalize(smiles_list=pred_smiles.split('.')))
             if '' in pred_set:
@@ -47,9 +50,12 @@ def match_smiles_lists(pred_list, target_list, beam_size, should_print=True):
             set_matched = match_smiles_set(pred_set, target_set)
 
             # Check if current pred_set matches any previous sets
-            for prev_set in prev_sets:
+            for cnt, prev_set in enumerate(prev_sets):
                 if match_smiles_set(pred_set, prev_set):
                     n_repeat[beam_idx] += 1
+                    if not cnt_flag:
+                        num_repeat += 1
+                        cnt_flag = True
 
             if len(pred_set) > 0:
                 # Add pred set to list of predictions for current example
@@ -58,6 +64,7 @@ def match_smiles_lists(pred_list, target_list, beam_size, should_print=True):
                 # If the pred set is empty and the string is not, then invalid
                 if pred_smiles != '':
                     n_invalid[beam_idx] += 1
+                    num_invalid += 1
 
             # Increment if not yet matched beam and the pred set matches
             if set_matched and not beam_matched:

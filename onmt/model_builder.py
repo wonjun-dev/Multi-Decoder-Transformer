@@ -34,8 +34,8 @@ def build_embeddings(opt, text_field, for_encoder=True):
             opt.feat_vec_size,
             emb_dim,
             position_encoding=opt.position_encoding,
-            dropout=(opt.dropout[0] if type(opt.dropout) is list
-                     else opt.dropout),
+            dropout=(opt.dropout[0]
+                     if type(opt.dropout) is list else opt.dropout),
         )
 
     pad_indices = [f.vocab.stoi[f.pad_token] for _, f in text_field]
@@ -59,8 +59,7 @@ def build_embeddings(opt, text_field, for_encoder=True):
         word_vocab_size=num_word_embeddings,
         feat_vocab_sizes=num_feat_embeddings,
         sparse=opt.optim == "sparseadam",
-        fix_word_vecs=fix_word_vecs
-    )
+        fix_word_vecs=fix_word_vecs)
     return emb
 
 
@@ -99,9 +98,9 @@ def load_test_model(opt, model_path=None):
     ArgumentParser.validate_model_opts(model_opt)
     vocab = checkpoint['vocab']
     if inputters.old_style_vocab(vocab):
-        fields = inputters.load_old_vocab(
-            vocab, opt.data_type, dynamic_dict=model_opt.copy_attn
-        )
+        fields = inputters.load_old_vocab(vocab,
+                                          opt.data_type,
+                                          dynamic_dict=model_opt.copy_attn)
     else:
         fields = vocab
 
@@ -176,9 +175,7 @@ def build_base_model(model_opt, fields, gpu, checkpoint=None, gpu_id=None):
         generator = nn.Sequential(
             nn.Linear(model_opt.dec_rnn_size,
                       len(fields["tgt"].base_field.vocab)),
-            Cast(torch.float32),
-            gen_func
-        )
+            Cast(torch.float32), gen_func)
         if model_opt.share_decoder_embeddings:
             generator[0].weight = decoder.embeddings.word_lut.weight
     else:
@@ -197,8 +194,10 @@ def build_base_model(model_opt, fields, gpu, checkpoint=None, gpu_id=None):
                        r'\1.layer_norm\2.weight', s)
             return s
 
-        checkpoint['model'] = {fix_key(k): v
-                               for k, v in checkpoint['model'].items()}
+        checkpoint['model'] = {
+            fix_key(k): v
+            for k, v in checkpoint['model'].items()
+        }
         # end of patch for backward compatibility
 
         model.load_state_dict(checkpoint['model'], strict=False)
