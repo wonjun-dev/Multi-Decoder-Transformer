@@ -74,8 +74,6 @@ def build_trainer(opt, device_id, model, fields, optim, model_saver=None):
 
     report_manager = onmt.utils.build_report_manager(opt)
     trainer = onmt.Trainer(model,
-                           train_loss,
-                           valid_loss,
                            optim,
                            trunc_size,
                            shard_size,

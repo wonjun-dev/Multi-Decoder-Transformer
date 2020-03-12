@@ -1,5 +1,6 @@
 """ Onmt NMT Model base class definition """
 import torch.nn as nn
+import torch
 
 
 class NMTModel(nn.Module):
@@ -11,14 +12,13 @@ class NMTModel(nn.Module):
       encoder (onmt.encoders.EncoderBase): an encoder object
       decoder (onmt.decoders.DecoderBase): a decoder object
     """
-    def __init__(self, encoder, decoder):
+    def __init__(self, encoder, header):
         super(NMTModel, self).__init__()
         self.encoder = encoder
-        self.decoder = decoder
+        self.header = header
 
     def forward(self,
                 src,
-                tgt,
                 lengths,
                 bptt=False,
                 latent_input=None,
@@ -42,21 +42,21 @@ class NMTModel(nn.Module):
             * decoder output ``(tgt_len, batch, hidden)``
             * dictionary attention dists of ``(tgt_len, batch, src_len)``
         """
-        tgt = tgt[:-1]  # exclude last target from inputs
+        # tgt = tgt[:-1]  # exclude last target from inputs
 
         enc_state, memory_bank, lengths = self.encoder(src, lengths)
-        print(enc_state.shape)
-        print(memory_bank.shape)
-        print(lengths)
-        input()
-        if bptt is False:
-            self.decoder.init_state(src, memory_bank, enc_state)
-        dec_out, attns = self.decoder(tgt,
-                                      memory_bank,
-                                      memory_lengths=lengths,
-                                      latent_input=latent_input,
-                                      segment_input=segment_input)
-        return dec_out, attns
+        # TODO avg pooling
+        h = torch.mean(memory_bank, dim=0)
+        z = self.header(h)
+
+        # if bptt is False:
+        #     self.decoder.init_state(src, memory_bank, enc_state)
+        # dec_out, attns = self.decoder(tgt,
+        #                               memory_bank,
+        #                               memory_lengths=lengths,
+        #                               latent_input=latent_input,
+        #                               segment_input=segment_input)
+        return z
 
     def update_dropout(self, dropout):
         self.encoder.update_dropout(dropout)

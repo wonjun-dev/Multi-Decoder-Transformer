@@ -6,6 +6,7 @@ import re
 import torch
 import torch.nn as nn
 from torch.nn.init import xavier_uniform_
+import torch.nn.functional as F
 
 import onmt.inputters as inputters
 import onmt.modules
@@ -87,6 +88,21 @@ def build_decoder(opt, embeddings):
     return str2dec[dec_type].from_opt(opt, embeddings)
 
 
+def build_header():
+    class Header(nn.Module):
+        def __init__(self):
+            super(Header, self).__init__()
+            self.l1 = nn.Linear(256, 256)
+            self.l2 = nn.Linear(256, 128)
+
+        def forward(self, x):
+            x = F.relu(self.l1(x))
+            x = self.l2(x)
+            return x
+
+    return Header()
+
+
 def load_test_model(opt, model_path=None):
     if model_path is None:
         model_path = opt.models[0]
@@ -140,20 +156,21 @@ def build_base_model(model_opt, fields, gpu, checkpoint=None, gpu_id=None):
 
     # Build encoder.
     encoder = build_encoder(model_opt, src_emb)
+    header = build_header()
 
     # Build decoder.
-    tgt_field = fields["tgt"]
-    tgt_emb = build_embeddings(model_opt, tgt_field, for_encoder=False)
+    # tgt_field = fields["tgt"]
+    # tgt_emb = build_embeddings(model_opt, tgt_field, for_encoder=False)
 
-    # Share the embedding matrix - preprocess with share_vocab required.
-    if model_opt.share_embeddings:
-        # src/tgt vocab should be the same if `-share_vocab` is specified.
-        assert src_field.base_field.vocab == tgt_field.base_field.vocab, \
-            "preprocess with -share_vocab if you use share_embeddings"
+    # # Share the embedding matrix - preprocess with share_vocab required.
+    # if model_opt.share_embeddings:
+    #     # src/tgt vocab should be the same if `-share_vocab` is specified.
+    #     assert src_field.base_field.vocab == tgt_field.base_field.vocab, \
+    #         "preprocess with -share_vocab if you use share_embeddings"
 
-        tgt_emb.word_lut.weight = src_emb.word_lut.weight
+    #     tgt_emb.word_lut.weight = src_emb.word_lut.weight
 
-    decoder = build_decoder(model_opt, tgt_emb)
+    # decoder = build_decoder(model_opt, tgt_emb)
 
     # Build NMTModel(= encoder + decoder).
     if gpu and gpu_id is not None:
@@ -162,27 +179,27 @@ def build_base_model(model_opt, fields, gpu, checkpoint=None, gpu_id=None):
         device = torch.device("cuda")
     elif not gpu:
         device = torch.device("cpu")
-    model = onmt.models.NMTModel(encoder, decoder)
+    model = onmt.models.NMTModel(encoder, header)
 
     model.n_latent = model_opt.n_latent
 
     # Build Generator.
-    if not model_opt.copy_attn:
-        if model_opt.generator_function == "sparsemax":
-            gen_func = onmt.modules.sparse_activations.LogSparsemax(dim=-1)
-        else:
-            gen_func = nn.LogSoftmax(dim=-1)
-        generator = nn.Sequential(
-            nn.Linear(model_opt.dec_rnn_size,
-                      len(fields["tgt"].base_field.vocab)),
-            Cast(torch.float32), gen_func)
-        if model_opt.share_decoder_embeddings:
-            generator[0].weight = decoder.embeddings.word_lut.weight
-    else:
-        tgt_base_field = fields["tgt"].base_field
-        vocab_size = len(tgt_base_field.vocab)
-        pad_idx = tgt_base_field.vocab.stoi[tgt_base_field.pad_token]
-        generator = CopyGenerator(model_opt.dec_rnn_size, vocab_size, pad_idx)
+    # if not model_opt.copy_attn:
+    #     if model_opt.generator_function == "sparsemax":
+    #         gen_func = onmt.modules.sparse_activations.LogSparsemax(dim=-1)
+    #     else:
+    #         gen_func = nn.LogSoftmax(dim=-1)
+    #     generator = nn.Sequential(
+    #         nn.Linear(model_opt.dec_rnn_size,
+    #                   len(fields["tgt"].base_field.vocab)),
+    #         Cast(torch.float32), gen_func)
+    #     if model_opt.share_decoder_embeddings:
+    #         generator[0].weight = decoder.embeddings.word_lut.weight
+    # else:
+    #     tgt_base_field = fields["tgt"].base_field
+    #     vocab_size = len(tgt_base_field.vocab)
+    #     pad_idx = tgt_base_field.vocab.stoi[tgt_base_field.pad_token]
+    #     generator = CopyGenerator(model_opt.dec_rnn_size, vocab_size, pad_idx)
 
     # Load the model states from checkpoint or initialize them.
     if checkpoint is not None:
@@ -206,24 +223,24 @@ def build_base_model(model_opt, fields, gpu, checkpoint=None, gpu_id=None):
         if model_opt.param_init != 0.0:
             for p in model.parameters():
                 p.data.uniform_(-model_opt.param_init, model_opt.param_init)
-            for p in generator.parameters():
-                p.data.uniform_(-model_opt.param_init, model_opt.param_init)
+            # for p in generator.parameters():
+            #     p.data.uniform_(-model_opt.param_init, model_opt.param_init)
         if model_opt.param_init_glorot:
             for p in model.parameters():
                 if p.dim() > 1:
                     xavier_uniform_(p)
-            for p in generator.parameters():
-                if p.dim() > 1:
-                    xavier_uniform_(p)
+            # for p in generator.parameters():
+            #     if p.dim() > 1:
+            #         xavier_uniform_(p)
 
         if hasattr(model.encoder, 'embeddings'):
             model.encoder.embeddings.load_pretrained_vectors(
                 model_opt.pre_word_vecs_enc)
-        if hasattr(model.decoder, 'embeddings'):
-            model.decoder.embeddings.load_pretrained_vectors(
-                model_opt.pre_word_vecs_dec)
+        # if hasattr(model.decoder, 'embeddings'):
+        #     model.decoder.embeddings.load_pretrained_vectors(
+        #         model_opt.pre_word_vecs_dec)
 
-    model.generator = generator
+    # model.generator = generator
     model.to(device)
 
     return model

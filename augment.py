@@ -25,6 +25,7 @@ def augment_smiles(batch, vocab):
     max_len = 0
     src_vocab = vocab
     augs = []
+    lens = []
     for i in idxs:
         raw_src = batch.dataset.examples[i].src[
             0]  # token seperated list w/o padding
@@ -34,6 +35,7 @@ def augment_smiles(batch, vocab):
                                 doRandom=True)  # convert mol to augmented smi
         tokens = [token for token in regex.findall(smi_aug)
                   ]  # token seperated list w/o padding
+        lens.append(len(tokens))
         if len(tokens) > max_len:
             max_len = len(tokens)
 
@@ -43,7 +45,7 @@ def augment_smiles(batch, vocab):
         # aug_src = ' '.join(tokens)
     new_batch = _smi2tensor(augs, vocab, max_len)
 
-    return new_batch
+    return new_batch, torch.tensor(lens).cuda()
 
 
 def _smi2tensor(augs, vocab, max_len):
