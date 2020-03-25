@@ -1,6 +1,10 @@
 import rdkit.Chem as Chem
 import re
 from collections import defaultdict
+from operator import itemgetter
+import copy
+from collections import Counter
+import numpy as np
 
 import pdb
 
@@ -73,12 +77,79 @@ def read_src_tgt_files(data_dir,
     return source_data, target_data
 
 
-def read_file(file_path, beam_size=1, max_read=-1, parse_func=None):
+def read_file(file_path,
+              beam_size=1,
+              max_read=-1,
+              parse_func=None,
+              test_ensem=False):
     read_file = open(file_path, 'r+')
     output_list = []  # List of beams if beam_size is > 1 else list of smiles
     cur_beam = []  # Keep track of the current beam
 
-    for line in read_file.readlines():
+    # TODO  sorting
+    lines = read_file.readlines()
+    if test_ensem:
+        new_lines = copy.deepcopy(lines)
+        unit = beam_size  # beam_size should be aug_num * beam_size
+        num_unit = int(len(lines) / unit)
+        for u in range(num_unit):
+            pred = lines[u * unit:(u + 1) * unit]
+
+            # sort by count
+            smis = []
+            probs = []
+            for p in pred:
+                smi, prob = p.split(',')
+                smis.append(smi)
+                probs.append(float(prob))
+            smis = np.array(smis)
+            probs = np.array(probs)
+
+            sort_by_cnt = Counter(smis).most_common()
+
+            tmp = []
+            for item in sort_by_cnt:
+                item = list(item)
+                smi = item[0]
+                cnt = item[1]
+                idxs = np.where(smis == smi)[0]
+                smi_probs = probs[idxs]
+                best_prob = max(smi_probs)
+                item.append(best_prob)
+                tmp.append(item)
+            # sort by cnt first, and sort by log probs sencondly
+            tmp = sorted(tmp, key=lambda x: (-x[1], -x[-1]))
+
+            l = []
+            for item in tmp:
+                cnt = item[1]
+                for _ in range(cnt):
+                    l.append(item[0] + ',' + str(item[1]) + ',' + str(item[2]))
+
+            # sort by log probability
+            # l = []
+            # for p in pred:
+            #     p_ = p.split(',')
+            #     t = [p_[0], float(p_[1])]
+            #     l.append(t)
+            # l.sort(key=itemgetter(1), reverse=True)
+            # for n, item in enumerate(l):
+            #     item[1] = str(item[1])
+            #     item = ','.join(item)
+            #     l[n] = item
+
+            new_lines[u * unit:(u + 1) * unit] = l
+
+        for idx, row in enumerate(new_lines):
+            if idx == 0:
+                with open(file_path + '_sorted_cnt.txt', 'w') as f:
+                    f.write(row + '\n')
+            else:
+                with open(file_path + '_sorted_cnt.txt', 'a') as f:
+                    f.write(row + '\n')
+
+        lines = new_lines
+    for line in lines:
         if parse_func is None:
             parse = line.strip().replace(' ', '')  # default parse function
             if ',' in parse:

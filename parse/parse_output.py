@@ -4,9 +4,12 @@ import numpy as np
 import operator
 import tqdm
 import json
-
+import sys
 import pdb
+import os
+sys.path.append(os.path.dirname(os.path.abspath(os.path.dirname(__file__))))
 import utils.data_utils as data_utils
+import csv
 
 
 def match_smiles_set(source_set, target_set):
@@ -19,14 +22,24 @@ def match_smiles_set(source_set, target_set):
     return True
 
 
-def match_smiles_lists(pred_list, target_list, beam_size, should_print=True):
+def match_smiles_lists(pred_list,
+                       target_list,
+                       beam_size,
+                       args,
+                       should_print=True):
     n_data = 0
     n_matched = np.zeros(beam_size)  # Count of matched smiles
     n_invalid = np.zeros(beam_size)  # Count of invalid smiles
     n_repeat = np.zeros(beam_size)  # Count of repeated predictions
+
+    result_path = args.result_path
+    seed = args.seed
+    cross = args.cross
+    cross_ensem = args.cross_ensem
     #
     # with open('template/rare_indices.txt', 'r+') as r_file:
     #     rare_rxn_list = json.load(r_file)
+
 
     for data_idx, target_smiles in enumerate(tqdm.tqdm(target_list)):
         # if data_idx not in rare_rxn_list:
@@ -39,7 +52,10 @@ def match_smiles_lists(pred_list, target_list, beam_size, should_print=True):
 
         beam_matched = False
         prev_sets = []
+        num_repeat = 0
+        num_invalid = 0
         for beam_idx, pred_smiles in enumerate(pred_beam):
+            cnt_flag = False
             pred_set = set(
                 data_utils.canonicalize(smiles_list=pred_smiles.split('.')))
             if '' in pred_set:
@@ -47,9 +63,12 @@ def match_smiles_lists(pred_list, target_list, beam_size, should_print=True):
             set_matched = match_smiles_set(pred_set, target_set)
 
             # Check if current pred_set matches any previous sets
-            for prev_set in prev_sets:
+            for cnt, prev_set in enumerate(prev_sets):
                 if match_smiles_set(pred_set, prev_set):
                     n_repeat[beam_idx] += 1
+                    if not cnt_flag:
+                        num_repeat += 1
+                        cnt_flag = True
 
             if len(pred_set) > 0:
                 # Add pred set to list of predictions for current example
@@ -58,21 +77,50 @@ def match_smiles_lists(pred_list, target_list, beam_size, should_print=True):
                 # If the pred set is empty and the string is not, then invalid
                 if pred_smiles != '':
                     n_invalid[beam_idx] += 1
+                    num_invalid += 1
 
             # Increment if not yet matched beam and the pred set matches
             if set_matched and not beam_matched:
-                n_matched[beam_idx] += 1
+                n_matched[beam_idx - num_invalid - num_repeat] += 1
                 beam_matched = True
 
     if should_print:
         print('total examples: %d' % n_data)
+        result_path_prefix = 'experiments/results'
+        if not os.path.isdir(result_path_prefix):
+            os.mkdir(result_path_prefix)
+        if not os.path.isdir(result_path):
+            os.mkdir(result_path)
+
+        if cross:
+            result_path = result_path + 'cross_master/'
+            if not os.path.isdir(result_path):
+                os.mkdir(result_path)
+        else:
+            result_path = result_path + 'master/'
+            if not os.path.isdir(result_path):
+                os.mkdir(result_path)
+
+        if cross_ensem:
+            result_path = result_path + 'cross_ensemble/'
+            if not os.path.isdir(result_path):
+                os.mkdir(result_path)
+
+        f = open(result_path + str(seed) + '.csv',
+                 'w',
+                 encoding='utf-8',
+                 newline='')
+        wr = csv.writer(f)
+
         for beam_idx in range(beam_size):
             match_perc = np.sum(n_matched[:beam_idx + 1]) / n_data
             invalid_perc = n_invalid[beam_idx] / n_data
             repeat_perc = n_repeat[beam_idx] / n_data
+            wr.writerow([match_perc, invalid_perc, repeat_perc])
 
             print('beam: %d, matched: %.3f, invalid: %.3f, repeat: %.3f' %
                   (beam_idx + 1, match_perc, invalid_perc, repeat_perc))
+        f.close()
 
     return n_data, n_matched, n_invalid, n_repeat
 
@@ -81,7 +129,10 @@ def combine_latent(input_dir,
                    n_latent,
                    beam_size,
                    output_path=None,
-                   clean=False):
+                   clean=False,
+                   cross=False,
+                   cross_ensem=False,
+                   alternative=False):
     """
     Reads the output smiles from each of the latent classes and combines them.
 
@@ -101,7 +152,18 @@ def combine_latent(input_dir,
         return (smiles, score)
 
     for latent_idx in range(n_latent):
-        file_path = '%s/output_%d' % (input_dir, latent_idx)
+        # TODO If this is n_latent > 1, below will not work!!!!
+        if (cross and n_latent < 2) or cross_ensem:
+            file_path = '%s/output_clean_cross_%d_align' % (input_dir,
+                                                            latent_idx)
+        elif cross and n_latent >= 2:
+            file_path = '%s/output_clean_%d_cross_align' % (input_dir,
+                                                            latent_idx)
+        elif alternative:
+            file_path = '%s/output_%d' % (input_dir, latent_idx + n_latent)
+        else:
+            file_path = '%s/output_%d' % (input_dir, latent_idx)
+
         smiles_list = data_utils.read_file(file_path,
                                            beam_size=beam_size,
                                            parse_func=parse)
@@ -160,6 +222,13 @@ def main():
     parser.add_argument('-n_latent', type=int, default=0)
     parser.add_argument('-beam_size', type=int, default=5)
     parser.add_argument('-clean', action='store_true', default=False)
+    parser.add_argument('-cross', action='store_true', default=False)
+    parser.add_argument('-cross_ensem', action='store_true', default=False)
+    parser.add_argument('-alternative', action='store_true', default=False)
+    parser.add_argument('-result_path', type=str)
+    parser.add_argument('-seed', type=int)
+    parser.add_argument('-test_ensem', action='store_true', default=False)
+
     args = parser.parse_args()
 
     beam_size, n_latent = args.beam_size, args.n_latent
@@ -170,13 +239,17 @@ def main():
                                      beam_size=beam_size,
                                      output_path='%s/combined' %
                                      args.input_dir,
-                                     clean=args.clean)
+                                     clean=args.clean,
+                                     cross=args.cross,
+                                     cross_ensem=args.cross_ensem,
+                                     alternative=args.alternative)
     else:
         smiles_list = data_utils.read_file(args.input_file,
-                                           beam_size=beam_size)
+                                           beam_size=beam_size,
+                                           test_ensem=args.test_ensem)
 
     target_list = data_utils.read_file(args.target_file, beam_size=1)
-    match_smiles_lists(smiles_list, target_list, beam_size)
+    match_smiles_lists(smiles_list, target_list, beam_size, args)
 
 
 if __name__ == '__main__':
