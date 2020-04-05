@@ -75,6 +75,9 @@ def main(opt, device_id, batch_queue=None, semaphore=None):
         ArgumentParser.validate_model_opts(model_opt)
         logger.info('Loading vocab from checkpoint at %s.' % opt.train_from)
         vocab = checkpoint['vocab']
+        if 'tgt1' in vocab:
+            vocab['tgt'] = vocab.pop('tgt1')
+            vocab.pop('tgt2')
     else:
         checkpoint = None
         model_opt = opt
@@ -83,8 +86,9 @@ def main(opt, device_id, batch_queue=None, semaphore=None):
     # check for code where vocab is saved instead of fields
     # (in the future this will be done in a smarter way)
     if old_style_vocab(vocab):
-        fields = load_old_vocab(
-            vocab, opt.model_type, dynamic_dict=opt.copy_attn)
+        fields = load_old_vocab(vocab,
+                                opt.model_type,
+                                dynamic_dict=opt.copy_attn)
     else:
         fields = vocab
 
@@ -116,8 +120,12 @@ def main(opt, device_id, batch_queue=None, semaphore=None):
     # Build model saver
     model_saver = build_model_saver(model_opt, opt, model, fields, optim)
 
-    trainer = build_trainer(
-        opt, device_id, model, fields, optim, model_saver=model_saver)
+    trainer = build_trainer(opt,
+                            device_id,
+                            model,
+                            fields,
+                            optim,
+                            model_saver=model_saver)
 
     if batch_queue is None:
         if len(opt.data_ids) > 1:
@@ -145,8 +153,7 @@ def main(opt, device_id, batch_queue=None, semaphore=None):
 
         train_iter = _train_iter()
 
-    valid_iter = build_dataset_iter(
-        "valid", fields, opt, is_train=False)
+    valid_iter = build_dataset_iter("valid", fields, opt, is_train=False)
 
     if len(opt.gpu_ranks):
         logger.info('Starting training on GPU: %s' % opt.gpu_ranks)
