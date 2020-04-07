@@ -212,7 +212,7 @@ class TransformerDecoder(DecoderBase):
 
         emb = self.embeddings(tgt, step=step)
         if self.n_latent > 1:
-            emb = emb + self.latent_embedding(kwargs["latent_input"])
+            emb = emb + self.latent_embedding(kwargs["latent_input"]).to(self.latent_embedding.weight.device))
         assert emb.dim() == 3  # len x batch x embedding_dim
 
         if self.n_segments > 0:
