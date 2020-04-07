@@ -24,29 +24,42 @@ class TransformerDecoderLayer(nn.Module):
       dropout (float): dropout probability.
       self_attn_type (string): type of self-attention scaled-dot, average
     """
-
-    def __init__(self, d_model, heads, d_ff, dropout,
-                 self_attn_type="scaled-dot", max_relative_positions=0,
+    def __init__(self,
+                 d_model,
+                 heads,
+                 d_ff,
+                 dropout,
+                 self_attn_type="scaled-dot",
+                 max_relative_positions=0,
                  aan_useffn=False):
         super(TransformerDecoderLayer, self).__init__()
 
         if self_attn_type == "scaled-dot":
             self.self_attn = MultiHeadedAttention(
-                heads, d_model, dropout=dropout,
+                heads,
+                d_model,
+                dropout=dropout,
                 max_relative_positions=max_relative_positions)
         elif self_attn_type == "average":
-            self.self_attn = AverageAttention(d_model, dropout=dropout,
+            self.self_attn = AverageAttention(d_model,
+                                              dropout=dropout,
                                               aan_useffn=aan_useffn)
 
-        self.context_attn = MultiHeadedAttention(
-            heads, d_model, dropout=dropout)
+        self.context_attn = MultiHeadedAttention(heads,
+                                                 d_model,
+                                                 dropout=dropout)
         self.feed_forward = PositionwiseFeedForward(d_model, d_ff, dropout)
         self.layer_norm_1 = nn.LayerNorm(d_model, eps=1e-6)
         self.layer_norm_2 = nn.LayerNorm(d_model, eps=1e-6)
         self.drop = nn.Dropout(dropout)
 
-    def forward(self, inputs, memory_bank, src_pad_mask, tgt_pad_mask,
-                layer_cache=None, step=None):
+    def forward(self,
+                inputs,
+                memory_bank,
+                src_pad_mask,
+                tgt_pad_mask,
+                layer_cache=None,
+                step=None):
         """
         Args:
             inputs (FloatTensor): ``(batch_size, 1, model_dim)``
@@ -64,28 +77,33 @@ class TransformerDecoderLayer(nn.Module):
         dec_mask = None
         if step is None:
             tgt_len = tgt_pad_mask.size(-1)
-            future_mask = torch.ones(
-                [tgt_len, tgt_len],
-                device=tgt_pad_mask.device,
-                dtype=torch.uint8)
+            future_mask = torch.ones([tgt_len, tgt_len],
+                                     device=tgt_pad_mask.device,
+                                     dtype=torch.uint8)
             future_mask = future_mask.triu_(1).view(1, tgt_len, tgt_len)
             dec_mask = torch.gt(tgt_pad_mask + future_mask, 0)
 
         input_norm = self.layer_norm_1(inputs)
 
         if isinstance(self.self_attn, MultiHeadedAttention):
-            query, attn = self.self_attn(input_norm, input_norm, input_norm,
+            query, attn = self.self_attn(input_norm,
+                                         input_norm,
+                                         input_norm,
                                          mask=dec_mask,
                                          layer_cache=layer_cache,
                                          attn_type="self")
         elif isinstance(self.self_attn, AverageAttention):
-            query, attn = self.self_attn(input_norm, mask=dec_mask,
-                                         layer_cache=layer_cache, step=step)
+            query, attn = self.self_attn(input_norm,
+                                         mask=dec_mask,
+                                         layer_cache=layer_cache,
+                                         step=step)
 
         query = self.drop(query) + inputs
 
         query_norm = self.layer_norm_2(query)
-        mid, attn = self.context_attn(memory_bank, memory_bank, query_norm,
+        mid, attn = self.context_attn(memory_bank,
+                                      memory_bank,
+                                      query_norm,
                                       mask=src_pad_mask,
                                       layer_cache=layer_cache,
                                       attn_type="context")
@@ -129,10 +147,18 @@ class TransformerDecoder(DecoderBase):
        embeddings (onmt.modules.Embeddings):
           embeddings to use, should have positional encodings
     """
-
-    def __init__(self, num_layers, d_model, heads, d_ff,
-                 copy_attn, self_attn_type, dropout, embeddings,
-                 max_relative_positions, aan_useffn, n_latent=1,
+    def __init__(self,
+                 num_layers,
+                 d_model,
+                 heads,
+                 d_ff,
+                 copy_attn,
+                 self_attn_type,
+                 dropout,
+                 embeddings,
+                 max_relative_positions,
+                 aan_useffn,
+                 n_latent=1,
                  n_segments=0):
         super(TransformerDecoder, self).__init__()
 
@@ -144,20 +170,24 @@ class TransformerDecoder(DecoderBase):
         self.n_latent = n_latent
         if n_latent > 1:
             # construct the latent class embedding
-            self.latent_embedding = nn.Embedding(
-                num_embeddings=n_latent, embedding_dim=d_model)
+            self.latent_embedding = nn.Embedding(num_embeddings=n_latent,
+                                                 embedding_dim=d_model)
 
         self.n_segments = n_segments
         if n_segments > 0:
-            self.segment_embedding = nn.Embedding(
-                num_embeddings=n_segments, embedding_dim=d_model)
+            self.segment_embedding = nn.Embedding(num_embeddings=n_segments,
+                                                  embedding_dim=d_model)
 
-        self.transformer_layers = nn.ModuleList(
-            [TransformerDecoderLayer(d_model, heads, d_ff, dropout,
-             self_attn_type=self_attn_type,
-             max_relative_positions=max_relative_positions,
-             aan_useffn=aan_useffn)
-             for i in range(num_layers)])
+        self.transformer_layers = nn.ModuleList([
+            TransformerDecoderLayer(
+                d_model,
+                heads,
+                d_ff,
+                dropout,
+                self_attn_type=self_attn_type,
+                max_relative_positions=max_relative_positions,
+                aan_useffn=aan_useffn) for i in range(num_layers)
+        ])
 
         # previously, there was a GlobalAttention module here for copy
         # attention. But it was never actually used -- the "copy" attention
@@ -212,7 +242,8 @@ class TransformerDecoder(DecoderBase):
 
         emb = self.embeddings(tgt, step=step)
         if self.n_latent > 1:
-            emb = emb + self.latent_embedding(kwargs["latent_input"]).to(self.latent_embedding.weight.device))
+            emb = emb + self.latent_embedding(kwargs["latent_input"].to(
+                self.latent_embedding.weight.device))
         assert emb.dim() == 3  # len x batch x embedding_dim
 
         if self.n_segments > 0:
@@ -231,13 +262,12 @@ class TransformerDecoder(DecoderBase):
         for i, layer in enumerate(self.transformer_layers):
             layer_cache = self.state["cache"]["layer_{}".format(i)] \
                 if step is not None else None
-            output, attn = layer(
-                output,
-                src_memory_bank,
-                src_pad_mask,
-                tgt_pad_mask,
-                layer_cache=layer_cache,
-                step=step)
+            output, attn = layer(output,
+                                 src_memory_bank,
+                                 src_pad_mask,
+                                 tgt_pad_mask,
+                                 layer_cache=layer_cache,
+                                 step=step)
 
         output = self.layer_norm(output)
         dec_outs = output.transpose(0, 1).contiguous()
