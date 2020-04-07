@@ -44,8 +44,9 @@ def main(opt):
     # check for code where vocab is saved instead of fields
     # (in the future this will be done in a smarter way)
     if old_style_vocab(vocab):
-        fields = load_old_vocab(
-            vocab, opt.model_type, dynamic_dict=opt.copy_attn)
+        fields = load_old_vocab(vocab,
+                                opt.model_type,
+                                dynamic_dict=opt.copy_attn)
     else:
         fields = vocab
 
@@ -76,13 +77,20 @@ def main(opt):
         for device_id in range(nb_gpu):
             q = mp.Queue(opt.queue_size)
             queues += [q]
-            procs.append(mp.Process(target=run, args=(
-                opt, device_id, error_queue, q, semaphore), daemon=True))
+            procs.append(
+                mp.Process(target=run,
+                           args=(opt, device_id, error_queue, q, semaphore),
+                           daemon=True))
             procs[device_id].start()
             logger.info(" Starting process pid: %d  " % procs[device_id].pid)
             error_handler.add_child(procs[device_id].pid)
         producer = mp.Process(target=batch_producer,
-                              args=(train_iter, queues, semaphore, opt,),
+                              args=(
+                                  train_iter,
+                                  queues,
+                                  semaphore,
+                                  opt,
+                              ),
                               daemon=True)
         producer.start()
         error_handler.add_child(producer.pid)
@@ -93,16 +101,19 @@ def main(opt):
 
     elif nb_gpu == 1:  # case 1 GPU only
         trained_model_path = single_main(opt, 0)
-    else:   # case only CPU
+    else:  # case only CPU
         trained_model_path = single_main(opt, -1)
 
-    translate_trained_model(
-        opt.n_latent, opt.data, opt.save_model, trained_model_path,
-        opt.use_segments, opt.max_segments)
+    # translate_trained_model(
+    #     opt.n_latent, opt.data, opt.save_model, trained_model_path,
+    #     opt.use_segments, opt.max_segments)
 
 
-def translate_trained_model(n_latent, data_path, output_dir,
-                            trained_model_path, use_segments=False,
+def translate_trained_model(n_latent,
+                            data_path,
+                            output_dir,
+                            trained_model_path,
+                            use_segments=False,
                             max_segments=10):
     parser = ArgumentParser()
     opts.config_opts(parser)
@@ -126,6 +137,7 @@ def translate_trained_model(n_latent, data_path, output_dir,
 def batch_producer(generator_to_serve, queues, semaphore, opt):
     init_logger(opt.log_file)
     set_random_seed(opt.seed, False)
+
     # generator_to_serve = iter(generator_to_serve)
 
     def pred(x):
@@ -137,8 +149,7 @@ def batch_producer(generator_to_serve, queues, semaphore, opt):
             if x[0] % opt.world_size == rank:
                 return True
 
-    generator_to_serve = filter(
-        pred, enumerate(generator_to_serve))
+    generator_to_serve = filter(pred, enumerate(generator_to_serve))
 
     def next_batch(device_id):
         new_batch = next(generator_to_serve)
@@ -150,8 +161,7 @@ def batch_producer(generator_to_serve, queues, semaphore, opt):
     for device_id, q in cycle(enumerate(queues)):
         b.dataset = None
         if isinstance(b.src, tuple):
-            b.src = tuple([_.to(torch.device(device_id))
-                           for _ in b.src])
+            b.src = tuple([_.to(torch.device(device_id)) for _ in b.src])
         else:
             b.src = b.src.to(torch.device(device_id))
         b.tgt = b.tgt.to(torch.device(device_id))
@@ -186,15 +196,14 @@ def run(opt, device_id, error_queue, batch_queue, semaphore):
 class ErrorHandler(object):
     """A class that listens for exceptions in children processes and propagates
     the tracebacks to the parent process."""
-
     def __init__(self, error_queue):
         """ init error handler """
         import signal
         import threading
         self.error_queue = error_queue
         self.children_pids = []
-        self.error_thread = threading.Thread(
-            target=self.error_listener, daemon=True)
+        self.error_thread = threading.Thread(target=self.error_listener,
+                                             daemon=True)
         self.error_thread.start()
         signal.signal(signal.SIGUSR1, self.signal_handler)
 
@@ -242,6 +251,7 @@ def _get_translate_parser():
     opts.config_optssS(parser)
     opts.translate_opts(parser)
     return parser
+
 
 if __name__ == "__main__":
     parser = _get_parser()
