@@ -60,7 +60,7 @@ done
 
 for l in ${latent[@]}; do
     for p in ${dropout[@]}; do
-        python run_average.py -target_dir experiments/results/${dataset}_${model_name}_${l}_${p}
+        python run_average.py -target_dir experiments/results/${dataset}_${model_name}_${l}_${p}/
     done
 done
 
