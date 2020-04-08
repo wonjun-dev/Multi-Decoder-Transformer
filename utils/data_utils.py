@@ -5,6 +5,7 @@ from operator import itemgetter
 import copy
 from collections import Counter
 import numpy as np
+from tqdm import tqdm
 
 import pdb
 
@@ -92,18 +93,36 @@ def read_file(file_path,
         new_lines = copy.deepcopy(lines)
         unit = beam_size  # beam_size should be aug_num * beam_size
         num_unit = int(len(lines) / unit)
-        for u in range(num_unit):
+        for u in tqdm(range(num_unit)):
             pred = lines[u * unit:(u + 1) * unit]
 
-            # sort by count
+            # sort by count & beam weight
             smis = []
             probs = []
+            canonicalized_smis = []
             for p in pred:
                 smi, prob = p.split(',')
                 smis.append(smi)
                 probs.append(float(prob))
+                canonicalized_smis.append(
+                    canonicalize(smi.strip().replace(' ', '')))
+
+            # calculate weight
+            weights = []
+            aug = 20
+            bs = 50
+            scale = np.array([
+                float(i + 1) for _ in range(aug) for i in range(bs)
+            ])  # TODO  get argument
+            scale = scale * 0.001 + 1
+            for smi in canonicalized_smis:
+                delta = np.array([float(s == smi) for s in canonicalized_smis])
+                delta /= scale
+                weights.append(sum(delta))
             smis = np.array(smis)
             probs = np.array(probs)
+            weights = np.array(weights)
+            canonicalized_smis = np.array(canonicalized_smis)
 
             sort_by_cnt = Counter(smis).most_common()
 
@@ -112,10 +131,11 @@ def read_file(file_path,
                 item = list(item)
                 smi = item[0]
                 cnt = item[1]
-                idxs = np.where(smis == smi)[0]
-                smi_probs = probs[idxs]
-                best_prob = max(smi_probs)
-                item.append(best_prob)
+
+                idxs = np.where(canonicalized_smis == canonicalize(
+                    smi.strip().replace(' ', '')))[0]
+                smi_weight = weights[idxs][0]
+                item.append(smi_weight)
                 tmp.append(item)
             # sort by cnt first, and sort by log probs sencondly
             tmp = sorted(tmp, key=lambda x: (-x[1], -x[-1]))
@@ -125,6 +145,37 @@ def read_file(file_path,
                 cnt = item[1]
                 for _ in range(cnt):
                     l.append(item[0] + ',' + str(item[1]) + ',' + str(item[2]))
+
+            # sort by count & log probs
+            # smis = []
+            # probs = []
+            # for p in pred:
+            #     smi, prob = p.split(',')
+            #     smis.append(smi)
+            #     probs.append(float(prob))
+            # smis = np.array(smis)
+            # probs = np.array(probs)
+
+            # sort_by_cnt = Counter(smis).most_common()
+
+            # tmp = []
+            # for item in sort_by_cnt:
+            #     item = list(item)
+            #     smi = item[0]
+            #     cnt = item[1]
+            #     idxs = np.where(smis == smi)[0]
+            #     smi_probs = probs[idxs]
+            #     best_prob = max(smi_probs)
+            #     item.append(best_prob)
+            #     tmp.append(item)
+            # # sort by cnt first, and sort by log probs sencondly
+            # tmp = sorted(tmp, key=lambda x: (-x[1], -x[-1]))
+
+            # l = []
+            # for item in tmp:
+            #     cnt = item[1]
+            #     for _ in range(cnt):
+            #         l.append(item[0] + ',' + str(item[1]) + ',' + str(item[2]))
 
             # sort by log probability
             # l = []
@@ -142,10 +193,10 @@ def read_file(file_path,
 
         for idx, row in enumerate(new_lines):
             if idx == 0:
-                with open(file_path + '_sorted_cnt.txt', 'w') as f:
+                with open(file_path + '_sorted_cnt_weight.txt', 'w') as f:
                     f.write(row + '\n')
             else:
-                with open(file_path + '_sorted_cnt.txt', 'a') as f:
+                with open(file_path + '_sorted_cnt_weight.txt', 'a') as f:
                     f.write(row + '\n')
 
         lines = new_lines
