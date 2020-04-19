@@ -9,11 +9,7 @@ from copy import deepcopy
 
 
 def build_model_saver(model_opt, opt, model, fields, optim):
-    model_saver = ModelSaver(opt.save_model,
-                             model,
-                             model_opt,
-                             fields,
-                             optim,
+    model_saver = ModelSaver(opt.save_model, model, model_opt, fields, optim,
                              opt.keep_checkpoint)
     return model_saver
 
@@ -25,8 +21,12 @@ class ModelSaverBase(object):
     * `_save`
     * `_rm_checkpoint
     """
-
-    def __init__(self, base_path, model, model_opt, fields, optim,
+    def __init__(self,
+                 base_path,
+                 model,
+                 model_opt,
+                 fields,
+                 optim,
                  keep_checkpoint=-1):
         self.base_path = base_path
         self.model = model
@@ -95,19 +95,23 @@ class ModelSaverBase(object):
 
 class ModelSaver(ModelSaverBase):
     """Simple model saver to filesystem"""
-
     def _save(self, step, model):
         real_model = (model.module
-                      if isinstance(model, nn.DataParallel)
-                      else model)
-        real_generator = (real_model.generator.module
-                          if isinstance(real_model.generator, nn.DataParallel)
-                          else real_model.generator)
+                      if isinstance(model, nn.DataParallel) else model)
+        real_generator_A = (real_model.generator_A.module if isinstance(
+            real_model.generator_A, nn.DataParallel) else
+                            real_model.generator_A)
+        real_generator_B = (real_model.generator_B.module if isinstance(
+            real_model.generator_B, nn.DataParallel) else
+                            real_model.generator_B)
 
         model_state_dict = real_model.state_dict()
-        model_state_dict = {k: v for k, v in model_state_dict.items()
-                            if 'generator' not in k}
-        generator_state_dict = real_generator.state_dict()
+        model_state_dict = {
+            k: v
+            for k, v in model_state_dict.items() if 'generator_A' not in k
+        }
+        generator_state_dict_A = real_generator_A.state_dict()
+        generator_state_dict_B = real_generator_B.state_dict()
 
         # NOTE: We need to trim the vocab to remove any unk tokens that
         # were not originally here.
@@ -125,7 +129,8 @@ class ModelSaver(ModelSaverBase):
 
         checkpoint = {
             'model': model_state_dict,
-            'generator': generator_state_dict,
+            'generator_A': generator_state_dict_A,
+            'generator_B': generator_state_dict_B,
             'vocab': vocab,
             'opt': self.model_opt,
             'optim': self.optim.state_dict(),

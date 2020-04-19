@@ -37,13 +37,17 @@ def build_trainer(opt, device_id, model, fields, optim, model_saver=None):
     """
 
     tgt_field = dict(fields)["tgt"].base_field
-    train_loss = onmt.utils.loss.build_loss_compute(model, tgt_field, opt)
+    train_loss_A, train_loss_B = onmt.utils.loss.build_loss_compute(
+        model, tgt_field, opt, reduce=False)
     latent_loss = None
     if model.n_latent > 1:
-        latent_loss = onmt.utils.loss.build_loss_compute(
-            model, tgt_field, opt, train=False, reduce=False)
-    valid_loss = onmt.utils.loss.build_loss_compute(
-        model, tgt_field, opt, train=False)
+        latent_loss = onmt.utils.loss.build_loss_compute(model,
+                                                         tgt_field,
+                                                         opt,
+                                                         train=False,
+                                                         reduce=False)
+    valid_loss_A, valid_loss_B = onmt.utils.loss.build_loss_compute(
+        model, tgt_field, opt, train=False, reduce=False)
 
     trunc_size = opt.truncated_decoder  # Badly named...
     shard_size = opt.max_generator_batches if opt.model_dtype == 'fp32' else 0
@@ -67,11 +71,21 @@ def build_trainer(opt, device_id, model, fields, optim, model_saver=None):
         if opt.early_stopping > 0 else None
 
     report_manager = onmt.utils.build_report_manager(opt)
-    trainer = onmt.Trainer(model, train_loss, valid_loss, optim, trunc_size,
-                           shard_size, norm_method,
-                           accum_count, accum_steps,
-                           n_gpu, gpu_rank,
-                           gpu_verbose_level, report_manager,
+    trainer = onmt.Trainer(model,
+                           train_loss_A,
+                           train_loss_B,
+                           valid_loss_A,
+                           train_loss_B,
+                           optim,
+                           trunc_size,
+                           shard_size,
+                           norm_method,
+                           accum_count,
+                           accum_steps,
+                           n_gpu,
+                           gpu_rank,
+                           gpu_verbose_level,
+                           report_manager,
                            model_saver=model_saver if gpu_rank == 0 else None,
                            average_decay=average_decay,
                            average_every=average_every,
@@ -109,21 +123,38 @@ class Trainer(object):
                 used to save a checkpoint.
                 Thus nothing will be saved if this parameter is None
     """
-
-    def __init__(self, model, train_loss, valid_loss, optim,
-                 trunc_size=0, shard_size=32,
-                 norm_method="sents", accum_count=[1],
+    def __init__(self,
+                 model,
+                 train_loss_A,
+                 train_loss_B,
+                 valid_loss_A,
+                 valid_loss_B,
+                 optim,
+                 trunc_size=0,
+                 shard_size=32,
+                 norm_method="sents",
+                 accum_count=[1],
                  accum_steps=[0],
-                 n_gpu=1, gpu_rank=1,
-                 gpu_verbose_level=0, report_manager=None, model_saver=None,
-                 average_decay=0, average_every=1, model_dtype='fp32',
-                 earlystopper=None, dropout=[0.3], dropout_steps=[0],
-                 latent_loss=None, segment_token_idx=None):
+                 n_gpu=1,
+                 gpu_rank=1,
+                 gpu_verbose_level=0,
+                 report_manager=None,
+                 model_saver=None,
+                 average_decay=0,
+                 average_every=1,
+                 model_dtype='fp32',
+                 earlystopper=None,
+                 dropout=[0.3],
+                 dropout_steps=[0],
+                 latent_loss=None,
+                 segment_token_idx=None):
         # Basic attributes.
         self.model = model
         self.n_latent = model.n_latent
-        self.train_loss = train_loss
-        self.valid_loss = valid_loss
+        self.train_loss_A = train_loss_A
+        self.train_loss_B = train_loss_B
+        self.valid_loss_A = valid_loss_A
+        self.valid_loss_B = valid_loss_B
         self.latent_loss = latent_loss
         self.optim = optim
         self.trunc_size = trunc_size
@@ -145,6 +176,8 @@ class Trainer(object):
         self.dropout = dropout
         self.dropout_steps = dropout_steps
         self.segment_token_idx = segment_token_idx
+        self.tracking_data = {i: list() for i in range(48)}
+        self.tracking_dec = {0: [], 1: []}
 
         for i in range(len(self.accum_count_l)):
             assert self.accum_count_l[i] > 0
@@ -166,8 +199,8 @@ class Trainer(object):
         for i in range(len(self.dropout_steps)):
             if step > 1 and step == self.dropout_steps[i] + 1:
                 self.model.update_dropout(self.dropout[i])
-                logger.info("Updated dropout to %f from step %d"
-                            % (self.dropout[i], step))
+                logger.info("Updated dropout to %f from step %d" %
+                            (self.dropout[i], step))
 
     def _accum_batches(self, iterator):
         batches = []
@@ -177,7 +210,7 @@ class Trainer(object):
             batches.append(batch)
             if self.norm_method == "tokens":
                 num_tokens = batch.tgt[1:, :, 0].ne(
-                    self.train_loss.padding_idx).sum()
+                    self.train_loss_A.padding_idx).sum()
                 normalization += num_tokens.item()
             else:
                 normalization += batch.batch_size
@@ -191,12 +224,13 @@ class Trainer(object):
 
     def _update_average(self, step):
         if self.moving_average is None:
-            copy_params = [params.detach().float()
-                           for params in self.model.parameters()]
+            copy_params = [
+                params.detach().float() for params in self.model.parameters()
+            ]
             self.moving_average = copy_params
         else:
             average_decay = max(self.average_decay,
-                                1 - (step + 1)/(step + 10))
+                                1 - (step + 1) / (step + 10))
             for (i, avg), cpt in zip(enumerate(self.moving_average),
                                      self.model.parameters()):
                 self.moving_average[i] = \
@@ -236,8 +270,8 @@ class Trainer(object):
 
         stats_manager = onmt.utils.StatsManager()
 
-        for i, (batches, normalization) in enumerate(
-                self._accum_batches(train_iter)):
+        for i, (batches,
+                normalization) in enumerate(self._accum_batches(train_iter)):
             step = self.optim.training_step
             # UPDATE DROPOUT
             self._maybe_update_dropout(step)
@@ -246,52 +280,54 @@ class Trainer(object):
                 logger.info("GpuRank %d: index: %d", self.gpu_rank, i)
             if self.gpu_verbose_level > 0:
                 logger.info("GpuRank %d: reduce_counter: %d \
-                            n_minibatch %d"
-                            % (self.gpu_rank, i + 1, len(batches)))
+                            n_minibatch %d" %
+                            (self.gpu_rank, i + 1, len(batches)))
 
             if self.n_gpu > 1:
-                normalization = sum(onmt.utils.distributed
-                                    .all_gather_list
-                                    (normalization))
+                normalization = sum(
+                    onmt.utils.distributed.all_gather_list(normalization))
 
-            self._gradient_accumulation(
-                batches, normalization, total_stats,
-                report_stats)
+            self._gradient_accumulation(batches, normalization, total_stats,
+                                        report_stats)
 
             if self.average_decay > 0 and i % self.average_every == 0:
                 self._update_average(step)
 
             if step % self.report_manager.report_every == 0:
                 stats_manager.add_stats(
-                    train_stats={'step': step,
-                                 'acc': report_stats.accuracy(),
-                                 'ppl': report_stats.ppl()})
+                    train_stats={
+                        'step': step,
+                        'acc': report_stats.accuracy(),
+                        'ppl': report_stats.ppl()
+                    })
 
             report_stats = self._maybe_report_training(
-                step, train_steps,
-                self.optim.learning_rate(),
-                report_stats)
+                step, train_steps, self.optim.learning_rate(), report_stats)
 
             if valid_iter is not None and step % valid_steps == 0:
                 if self.gpu_verbose_level > 0:
-                    logger.info('GpuRank %d: validate step %d'
-                                % (self.gpu_rank, step))
-                valid_stats = self.validate(
-                    valid_iter, moving_average=self.moving_average)
+                    logger.info('GpuRank %d: validate step %d' %
+                                (self.gpu_rank, step))
+                valid_stats = self.validate(valid_iter,
+                                            moving_average=self.moving_average)
+                print(self.tracking_data)
                 if self.gpu_verbose_level > 0:
                     logger.info('GpuRank %d: gather valid stat \
                                 step %d' % (self.gpu_rank, step))
                 valid_stats = self._maybe_gather_stats(valid_stats)
                 if self.gpu_verbose_level > 0:
-                    logger.info('GpuRank %d: report stat step %d'
-                                % (self.gpu_rank, step))
+                    logger.info('GpuRank %d: report stat step %d' %
+                                (self.gpu_rank, step))
                 self._report_step(self.optim.learning_rate(),
-                                  step, valid_stats=valid_stats)
+                                  step,
+                                  valid_stats=valid_stats)
 
                 stats_manager.add_stats(
-                    valid_stats={'step': step,
-                                 'acc': valid_stats.accuracy(),
-                                 'ppl': valid_stats.ppl()})
+                    valid_stats={
+                        'step': step,
+                        'acc': valid_stats.accuracy(),
+                        'ppl': valid_stats.ppl()
+                    })
                 # Run patience mechanism
                 if self.earlystopper is not None:
                     self.earlystopper(valid_stats, step)
@@ -300,8 +336,8 @@ class Trainer(object):
                         break
 
             if (self.model_saver is not None
-                and (save_checkpoint_steps != 0
-                     and step % save_checkpoint_steps == 0)):
+                    and (save_checkpoint_steps != 0
+                         and step % save_checkpoint_steps == 0)):
                 self.model_saver.save(step, moving_average=self.moving_average)
 
             if train_steps > 0 and step >= train_steps:
@@ -309,7 +345,7 @@ class Trainer(object):
 
         if self.model_saver is not None:
             self.model_saver.save(step, moving_average=self.moving_average)
-        return total_stats, stats_manager
+        return total_stats, stats_manager, self.tracking_data, self.tracking_dec
 
     def validate(self, valid_iter, moving_average=None):
         """ Validate model.
@@ -344,31 +380,54 @@ class Trainer(object):
                 if self.n_latent > 1:
                     seq_len, batch_sz, _ = tgt.size()
                     latent_inputs = latent_utils.get_latent_inputs(
-                        self.n_latent, seq_len-1, batch_sz)
+                        self.n_latent, seq_len - 1, batch_sz)
 
                     all_losses = []
                     for latent_input in latent_inputs:
                         latent_outputs, _ = valid_model(
-                            src, tgt, src_lengths, latent_input=latent_input, segment_input=segment_input)
+                            src,
+                            tgt,
+                            src_lengths,
+                            latent_input=latent_input,
+                            segment_input=segment_input)
                         latent_losses, _ = self.latent_loss(
-                            batch, latent_outputs, None, n_latent=self.n_latent)
+                            batch,
+                            latent_outputs,
+                            None,
+                            n_latent=self.n_latent)
                         all_losses.append(latent_losses)
                     all_losses = torch.stack(all_losses, dim=1)
                     max_latent = torch.argmin(all_losses, dim=1)
-                    max_latent_input = max_latent.view([1, -1]).repeat([seq_len-1, 1])
+                    max_latent_input = max_latent.view([1, -1]).repeat(
+                        [seq_len - 1, 1])
 
-                    outputs, attns = valid_model(
-                        src, tgt, src_lengths, latent_input=max_latent_input, segment_input=segment_input)
+                    outputs, attns = valid_model(src,
+                                                 tgt,
+                                                 src_lengths,
+                                                 latent_input=max_latent_input,
+                                                 segment_input=segment_input)
 
                     latent_counts = np.zeros([self.n_latent])
                     for i in range(self.n_latent):
                         latent_counts[i] = torch.sum(max_latent == i).item()
                 else:
                     # F-prop through the model.
-                    outputs, attns = valid_model(src, tgt, src_lengths, segment_input=segment_input)
+                    outputs_A, outputs_B, attns_A, attns_B = valid_model(
+                        src, tgt, src_lengths, segment_input=segment_input)
 
                 # Compute loss.
-                _, batch_stats = self.valid_loss(batch, outputs, attns, n_latent=self.n_latent)
+                loss_A, scores_A, gtruth, max_len, batch_stats_A = self.valid_loss_A(
+                    batch, outputs_A, attns_A, n_latent=self.n_latent)
+                loss_B, scores_B, gtruth, max_len, batch_stats_B = self.valid_loss_B(
+                    batch, outputs_B, attns_B, n_latent=self.n_latent)
+
+                # compare loss and select decoder
+                loss_A, loss_B, score_A, score_B, mask_A, mask_B = self._compare_loss(
+                    loss_A, loss_B, scores_A, scores_B, max_len)
+                loss = (loss_A + loss_B).sum()
+                score = score_A + score_B
+                batch_stats = self.valid_loss_A._stats(loss.clone(), score,
+                                                       gtruth, self.n_latent)
 
                 if self.n_latent > 1:
                     batch_stats.latent_counts += latent_counts
@@ -405,9 +464,9 @@ class Trainer(object):
             tgt_outer = batch.tgt
 
             bptt = False
-            for j in range(0, target_size-1, trunc_size):
+            for j in range(0, target_size - 1, trunc_size):
                 # 1. Create truncated target.
-                tgt = tgt_outer[j: j + trunc_size]
+                tgt = tgt_outer[j:j + trunc_size]
 
                 # 2. F-prop all but generator.
                 if self.accum_count == 1:
@@ -419,67 +478,109 @@ class Trainer(object):
                         tgt, self.segment_token_idx)
 
                 if self.n_latent > 1:
-                    self.model.eval()  # Turn off dropout when choosing latent classes
+                    self.model.eval(
+                    )  # Turn off dropout when choosing latent classes
                     seq_len, batch_sz, _ = tgt.size()
 
                     latent_inputs = latent_utils.get_latent_inputs(
-                        self.n_latent, seq_len-1, batch_sz)
+                        self.n_latent, seq_len - 1, batch_sz)
 
                     with torch.no_grad():
                         all_losses = []
                         for latent_input in latent_inputs:
                             latent_outputs, _ = self.model(
-                                src, tgt, src_lengths, latent_input=latent_input, segment_input=segment_input)
+                                src,
+                                tgt,
+                                src_lengths,
+                                latent_input=latent_input,
+                                segment_input=segment_input)
                             latent_losses, _ = self.latent_loss(
                                 batch, latent_outputs, None)
                             all_losses.append(latent_losses)
                         all_losses = torch.stack(all_losses, dim=1)
                         max_latent = torch.argmin(all_losses, dim=1)
-                        max_latent_input = max_latent.view([1, -1]).repeat([seq_len-1, 1])
+                        max_latent_input = max_latent.view([1, -1]).repeat(
+                            [seq_len - 1, 1])
 
                     self.model.train()
-                    outputs, attns = self.model(
-                        src, tgt, src_lengths, bptt=bptt, latent_input=max_latent_input, segment_input=segment_input)
+                    outputs, attns = self.model(src,
+                                                tgt,
+                                                src_lengths,
+                                                bptt=bptt,
+                                                latent_input=max_latent_input,
+                                                segment_input=segment_input)
 
                     latent_counts = np.zeros([self.n_latent])
                     for i in range(self.n_latent):
                         latent_counts[i] = torch.sum(max_latent == i).item()
                 else:
-                    outputs, attns = self.model(src, tgt, src_lengths, bptt=bptt, segment_input=segment_input)
+                    outputs_A, outputs_B, attns_A, attns_B = self.model(
+                        src,
+                        tgt,
+                        src_lengths,
+                        bptt=bptt,
+                        segment_input=segment_input)
+
                 bptt = True
 
                 # 3. Compute loss.
-                try:
-                    loss, batch_stats = self.train_loss(
-                        batch,
-                        outputs,
-                        attns,
-                        normalization=normalization,
-                        shard_size=self.shard_size,
-                        trunc_start=j,
-                        trunc_size=trunc_size,
-                        n_latent=self.n_latent)
-                    if self.n_latent > 1:
-                        batch_stats.latent_counts += latent_counts
+                # try:
+                # loss for decoder_A
+                # loss_A: (bs)
+                # scores_A: (bs*max_len, vocab)
+                loss_A, scores_A, gtruth, max_len, batch_stats_A = self.train_loss_A(
+                    batch,
+                    outputs_A,
+                    attns_A,
+                    normalization=normalization,
+                    shard_size=self.shard_size,
+                    trunc_start=j,
+                    trunc_size=trunc_size,
+                    n_latent=self.n_latent)
+                # loss for decoder_B
+                loss_B, scores_B, gtruth, max_len, batch_stats_B = self.train_loss_B(
+                    batch,
+                    outputs_B,
+                    attns_B,
+                    normalization=normalization,
+                    shard_size=self.shard_size,
+                    trunc_start=j,
+                    trunc_size=trunc_size,
+                    n_latent=self.n_latent)
 
-                    if loss is not None:
-                        self.optim.backward(loss)
+                # compare loss and select decoder
+                loss_A, loss_B, score_A, score_B, mask_A, mask_B = self._compare_loss(
+                    loss_A, loss_B, scores_A, scores_B, max_len)
+                loss = (loss_A + loss_B).sum()
+                score = score_A + score_B
+                batch_stats = self.train_loss_A._stats(loss.clone(), score,
+                                                       gtruth, self.n_latent)
 
-                    total_stats.update(batch_stats)
-                    report_stats.update(batch_stats)
+                # tracking
+                self._tracking(batch.indices, mask_A, mask_B)
+                if self.n_latent > 1:
+                    batch_stats.latent_counts += latent_counts
 
-                except Exception:
-                    traceback.print_exc()
-                    logger.info("At step %d, we removed a batch - accum %d",
-                                self.optim.training_step, k)
+                total_stats.update(batch_stats)
+                report_stats.update(batch_stats)
+
+                loss /= float(normalization)
+                if loss is not None:
+                    self.optim.backward(loss)
+
+                # except Exception:
+                #     traceback.print_exc()
+                #     logger.info("At step %d, we removed a batch - accum %d",
+                #                 self.optim.training_step, k)
 
                 # 4. Update the parameters and statistics.
                 if self.accum_count == 1:
                     # Multi GPU gradient gather
                     if self.n_gpu > 1:
-                        grads = [p.grad.data for p in self.model.parameters()
-                                 if p.requires_grad
-                                 and p.grad is not None]
+                        grads = [
+                            p.grad.data for p in self.model.parameters()
+                            if p.requires_grad and p.grad is not None
+                        ]
                         onmt.utils.distributed.all_reduce_and_rescale_tensors(
                             grads, float(1))
                     self.optim.step()
@@ -488,16 +589,19 @@ class Trainer(object):
                 # TO CHECK
                 # if dec_state is not None:
                 #    dec_state.detach()
-                if self.model.decoder.state is not None:
-                    self.model.decoder.detach_state()
+                if self.model.decoder_A.state is not None:
+                    self.model.decoder_A.detach_state()
+                if self.model.decoder_B.state is not None:
+                    self.model.decoder_B.detach_state()
 
         # in case of multi step gradient accumulation,
         # update only after accum batches
         if self.accum_count > 1:
             if self.n_gpu > 1:
-                grads = [p.grad.data for p in self.model.parameters()
-                         if p.requires_grad
-                         and p.grad is not None]
+                grads = [
+                    p.grad.data for p in self.model.parameters()
+                    if p.requires_grad and p.grad is not None
+                ]
                 onmt.utils.distributed.all_reduce_and_rescale_tensors(
                     grads, float(1))
             self.optim.step()
@@ -534,17 +638,50 @@ class Trainer(object):
         see `onmt.utils.ReportManagerBase.report_training` for doc
         """
         if self.report_manager is not None:
-            return self.report_manager.report_training(
-                step, num_steps, learning_rate, report_stats,
-                multigpu=self.n_gpu > 1)
+            return self.report_manager.report_training(step,
+                                                       num_steps,
+                                                       learning_rate,
+                                                       report_stats,
+                                                       multigpu=self.n_gpu > 1)
 
-    def _report_step(self, learning_rate, step, train_stats=None,
+    def _report_step(self,
+                     learning_rate,
+                     step,
+                     train_stats=None,
                      valid_stats=None):
         """
         Simple function to report stats (if report_manager is set)
         see `onmt.utils.ReportManagerBase.report_step` for doc
         """
         if self.report_manager is not None:
-            return self.report_manager.report_step(
-                learning_rate, step, train_stats=train_stats,
-                valid_stats=valid_stats)
+            return self.report_manager.report_step(learning_rate,
+                                                   step,
+                                                   train_stats=train_stats,
+                                                   valid_stats=valid_stats)
+
+    def _compare_loss(self, loss_A, loss_B, scores_A, scores_B, max_len):
+        """
+        Compare loss_A with loss_B and masking bigger ones.
+        """
+        mask_A = (loss_A < loss_B).float()
+        mask_B = (loss_B < loss_A).float()
+        score_mask_A = mask_A.repeat_interleave(max_len).unsqueeze(-1)
+        score_mask_B = mask_B.repeat_interleave(max_len).unsqueeze(-1)
+        loss_A = loss_A * mask_A
+        loss_B = loss_B * mask_B
+        scores_A = scores_A * score_mask_A
+        scores_B = scores_B * score_mask_B
+
+        return loss_A, loss_B, scores_A, scores_B, mask_A, mask_B
+
+    def _tracking(self, indices, mask_A, mask_B):
+        idx_stat = self.tracking_data
+        dec_stat = self.tracking_dec
+        for i, batch_idx in enumerate(indices):
+            if batch_idx.item() in idx_stat.keys():
+                idx_stat[batch_idx.item()].append(int(mask_A[i].item()))
+            else:
+                pass
+
+        dec_stat[0].append(mask_A.sum().item())
+        dec_stat[1].append(mask_B.sum().item())

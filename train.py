@@ -17,6 +17,8 @@ from onmt.inputters.inputter import build_dataset_iter, \
 import onmt.opts as opts
 import translate
 from itertools import cycle
+import numpy as np
+import json
 
 import pdb
 
@@ -100,13 +102,34 @@ def main(opt):
         producer.terminate()
 
     elif nb_gpu == 1:  # case 1 GPU only
-        trained_model_path = single_main(opt, 0)
+        trained_model_path, tracking_idx, tracking_dec = single_main(opt, 0)
     else:  # case only CPU
-        trained_model_path = single_main(opt, -1)
+        trained_model_path, tracking_idx, tracking_dec = single_main(opt, -1)
 
     # translate_trained_model(
     #     opt.n_latent, opt.data, opt.save_model, trained_model_path,
     #     opt.use_segments, opt.max_segments)
+
+    # save tracking
+    save_path = '/'.join(opt.save_model.split('/')[:-1])
+    idx_stat = json.dumps(tracking_idx)
+    with open(save_path + 'tracking_idx.json', 'w') as f:
+        f.write(idx_stat)
+    dec_stat = json.dumps(tracking_dec)
+    with open(save_path + 'tracking_dec.json', 'w') as f:
+        f.write(dec_stat)
+
+    # draw plot
+    import matplotlib.pyplot as plt
+    for k, v in tracking_idx.items():
+        plt.plot(list(range(1, len(v) + 1)), v, 'ro')
+        plt.savefig(save_path + 'idx-{}.png'.format(k))
+        plt.close()
+
+    plt.plot(list(range(1, 251)), tracking_dec[0][:250], 'g',
+             list(range(1, 251)), tracking_dec[1][:250], 'b')
+    plt.savefig(save_path + 'dec.png')
+    plt.close()
 
 
 def translate_trained_model(n_latent,

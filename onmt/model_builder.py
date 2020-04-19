@@ -34,8 +34,8 @@ def build_embeddings(opt, text_field, for_encoder=True):
             opt.feat_vec_size,
             emb_dim,
             position_encoding=opt.position_encoding,
-            dropout=(opt.dropout[0] if type(opt.dropout) is list
-                     else opt.dropout),
+            dropout=(opt.dropout[0]
+                     if type(opt.dropout) is list else opt.dropout),
         )
 
     pad_indices = [f.vocab.stoi[f.pad_token] for _, f in text_field]
@@ -59,8 +59,7 @@ def build_embeddings(opt, text_field, for_encoder=True):
         word_vocab_size=num_word_embeddings,
         feat_vocab_sizes=num_feat_embeddings,
         sparse=opt.optim == "sparseadam",
-        fix_word_vecs=fix_word_vecs
-    )
+        fix_word_vecs=fix_word_vecs)
     return emb
 
 
@@ -99,9 +98,9 @@ def load_test_model(opt, model_path=None):
     ArgumentParser.validate_model_opts(model_opt)
     vocab = checkpoint['vocab']
     if inputters.old_style_vocab(vocab):
-        fields = inputters.load_old_vocab(
-            vocab, opt.data_type, dynamic_dict=model_opt.copy_attn
-        )
+        fields = inputters.load_old_vocab(vocab,
+                                          opt.data_type,
+                                          dynamic_dict=model_opt.copy_attn)
     else:
         fields = vocab
 
@@ -110,7 +109,8 @@ def load_test_model(opt, model_path=None):
     if opt.fp32:
         model.float()
     model.eval()
-    model.generator.eval()
+    model.generator_A.eval()
+    model.generator_B.eval()
     return fields, model, model_opt
 
 
@@ -154,7 +154,8 @@ def build_base_model(model_opt, fields, gpu, checkpoint=None, gpu_id=None):
 
         tgt_emb.word_lut.weight = src_emb.word_lut.weight
 
-    decoder = build_decoder(model_opt, tgt_emb)
+    decoder_A = build_decoder(model_opt, tgt_emb)
+    decoder_B = build_decoder(model_opt, tgt_emb)
 
     # Build NMTModel(= encoder + decoder).
     if gpu and gpu_id is not None:
@@ -163,7 +164,7 @@ def build_base_model(model_opt, fields, gpu, checkpoint=None, gpu_id=None):
         device = torch.device("cuda")
     elif not gpu:
         device = torch.device("cpu")
-    model = onmt.models.NMTModel(encoder, decoder)
+    model = onmt.models.NMTModel(encoder, decoder_A, decoder_B)
 
     model.n_latent = model_opt.n_latent
 
@@ -173,14 +174,17 @@ def build_base_model(model_opt, fields, gpu, checkpoint=None, gpu_id=None):
             gen_func = onmt.modules.sparse_activations.LogSparsemax(dim=-1)
         else:
             gen_func = nn.LogSoftmax(dim=-1)
-        generator = nn.Sequential(
+        generator_A = nn.Sequential(
             nn.Linear(model_opt.dec_rnn_size,
                       len(fields["tgt"].base_field.vocab)),
-            Cast(torch.float32),
-            gen_func
-        )
+            Cast(torch.float32), gen_func)
+        generator_B = nn.Sequential(
+            nn.Linear(model_opt.dec_rnn_size,
+                      len(fields["tgt"].base_field.vocab)),
+            Cast(torch.float32), gen_func)
         if model_opt.share_decoder_embeddings:
-            generator[0].weight = decoder.embeddings.word_lut.weight
+            generator_A[0].weight = decoder_A.embeddings.word_lut.weight
+            generator_B[0].weight = decoder_B.embeddings.word_lut.weight
     else:
         tgt_base_field = fields["tgt"].base_field
         vocab_size = len(tgt_base_field.vocab)
@@ -197,34 +201,46 @@ def build_base_model(model_opt, fields, gpu, checkpoint=None, gpu_id=None):
                        r'\1.layer_norm\2.weight', s)
             return s
 
-        checkpoint['model'] = {fix_key(k): v
-                               for k, v in checkpoint['model'].items()}
+        checkpoint['model'] = {
+            fix_key(k): v
+            for k, v in checkpoint['model'].items()
+        }
         # end of patch for backward compatibility
 
         model.load_state_dict(checkpoint['model'], strict=False)
-        generator.load_state_dict(checkpoint['generator'], strict=False)
+        generator_A.load_state_dict(checkpoint['generator_A'], strict=False)
+        generator_B.load_state_dict(checkpoint['generator_B'], strict=False)
     else:
         if model_opt.param_init != 0.0:
             for p in model.parameters():
                 p.data.uniform_(-model_opt.param_init, model_opt.param_init)
-            for p in generator.parameters():
+            for p in generator_A.parameters():
+                p.data.uniform_(-model_opt.param_init, model_opt.param_init)
+            for p in generator_B.parameters():
                 p.data.uniform_(-model_opt.param_init, model_opt.param_init)
         if model_opt.param_init_glorot:
             for p in model.parameters():
                 if p.dim() > 1:
                     xavier_uniform_(p)
-            for p in generator.parameters():
+            for p in generator_A.parameters():
+                if p.dim() > 1:
+                    xavier_uniform_(p)
+            for p in generator_B.parameters():
                 if p.dim() > 1:
                     xavier_uniform_(p)
 
         if hasattr(model.encoder, 'embeddings'):
             model.encoder.embeddings.load_pretrained_vectors(
                 model_opt.pre_word_vecs_enc)
-        if hasattr(model.decoder, 'embeddings'):
-            model.decoder.embeddings.load_pretrained_vectors(
+        if hasattr(model.decoder_A, 'embeddings'):
+            model.decoder_A.embeddings.load_pretrained_vectors(
+                model_opt.pre_word_vecs_dec)
+        if hasattr(model.decoder_B, 'embeddings'):
+            model.decoder_B.embeddings.load_pretrained_vectors(
                 model_opt.pre_word_vecs_dec)
 
-    model.generator = generator
+    model.generator_A = generator_A
+    model.generator_B = generator_B
     model.to(device)
 
     return model

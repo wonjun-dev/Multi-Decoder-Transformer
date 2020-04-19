@@ -11,13 +11,19 @@ class NMTModel(nn.Module):
       encoder (onmt.encoders.EncoderBase): an encoder object
       decoder (onmt.decoders.DecoderBase): a decoder object
     """
-
-    def __init__(self, encoder, decoder):
+    def __init__(self, encoder, decoder_A, decoder_B):
         super(NMTModel, self).__init__()
         self.encoder = encoder
-        self.decoder = decoder
+        self.decoder_A = decoder_A
+        self.decoder_B = decoder_B
 
-    def forward(self, src, tgt, lengths, bptt=False, latent_input=None, segment_input=None):
+    def forward(self,
+                src,
+                tgt,
+                lengths,
+                bptt=False,
+                latent_input=None,
+                segment_input=None):
         """Forward propagate a `src` and `tgt` pair for training.
         Possible initialized with a beginning decoder state.
 
@@ -41,11 +47,23 @@ class NMTModel(nn.Module):
 
         enc_state, memory_bank, lengths = self.encoder(src, lengths)
         if bptt is False:
-            self.decoder.init_state(src, memory_bank, enc_state)
-        dec_out, attns = self.decoder(
-            tgt, memory_bank, memory_lengths=lengths, latent_input=latent_input, segment_input=segment_input)
-        return dec_out, attns
+            self.decoder_A.init_state(src, memory_bank, enc_state)
+            self.decoder_B.init_state(src, memory_bank, enc_state)
+
+        dec_out_a, attns_a = self.decoder_A(tgt,
+                                            memory_bank,
+                                            memory_lengths=lengths,
+                                            latent_input=latent_input,
+                                            segment_input=segment_input)
+
+        dec_out_b, attns_b = self.decoder_B(tgt,
+                                            memory_bank,
+                                            memory_lengths=lengths,
+                                            latent_input=latent_input,
+                                            segment_input=segment_input)
+        return dec_out_a, dec_out_b, attns_a, attns_b
 
     def update_dropout(self, dropout):
         self.encoder.update_dropout(dropout)
-        self.decoder.update_dropout(dropout)
+        self.decoder_A.update_dropout(dropout)
+        self.decoder_B.update_dropout(dropout)
