@@ -1,9 +1,9 @@
 #!/bin/bash
 
-dataset=USPTO-50k_no_rxn_aug_2
-latent=(0 2 5)
+dataset=USPTO-50k_no_rxn_aug_2_set_aug
+latent=(0)
 dropout=(0.25)
-model_name=mt
+model_name=comm
 device=$1
 seed=$2
 

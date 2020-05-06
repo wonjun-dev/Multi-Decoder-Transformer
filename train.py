@@ -110,26 +110,26 @@ def main(opt):
     #     opt.n_latent, opt.data, opt.save_model, trained_model_path,
     #     opt.use_segments, opt.max_segments)
 
-    # save tracking
-    save_path = '/'.join(opt.save_model.split('/')[:-1])
-    idx_stat = json.dumps(tracking_idx)
-    with open(save_path + 'tracking_idx.json', 'w') as f:
-        f.write(idx_stat)
-    dec_stat = json.dumps(tracking_dec)
-    with open(save_path + 'tracking_dec.json', 'w') as f:
-        f.write(dec_stat)
+    # # save tracking
+    # save_path = '/'.join(opt.save_model.split('/')[:-1])
+    # idx_stat = json.dumps(tracking_idx)
+    # with open(save_path + 'tracking_idx.json', 'w') as f:
+    #     f.write(idx_stat)
+    # dec_stat = json.dumps(tracking_dec)
+    # with open(save_path + 'tracking_dec.json', 'w') as f:
+    #     f.write(dec_stat)
 
-    # draw plot
-    import matplotlib.pyplot as plt
-    for k, v in tracking_idx.items():
-        plt.plot(list(range(1, len(v) + 1)), v, 'ro')
-        plt.savefig(save_path + 'idx-{}.png'.format(k))
-        plt.close()
+    # # draw plot
+    # import matplotlib.pyplot as plt
+    # for k, v in tracking_idx.items():
+    #     plt.plot(list(range(1, len(v) + 1)), v, 'ro')
+    #     plt.savefig(save_path + 'idx-{}.png'.format(k))
+    #     plt.close()
 
-    plt.plot(list(range(1, 251)), tracking_dec[0][:250], 'g',
-             list(range(1, 251)), tracking_dec[1][:250], 'b')
-    plt.savefig(save_path + 'dec.png')
-    plt.close()
+    # plt.plot(list(range(1, 251)), tracking_dec[0][:250], 'g',
+    #          list(range(1, 251)), tracking_dec[1][:250], 'b')
+    # plt.savefig(save_path + 'dec.png')
+    # plt.close()
 
 
 def translate_trained_model(n_latent,

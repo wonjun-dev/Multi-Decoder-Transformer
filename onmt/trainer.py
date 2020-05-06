@@ -17,6 +17,7 @@ import traceback
 import onmt.utils
 from onmt.utils.logging import logger
 import onmt.utils.latent_utils as latent_utils
+import math
 
 import pdb
 
@@ -288,7 +289,7 @@ class Trainer(object):
                     onmt.utils.distributed.all_gather_list(normalization))
 
             self._gradient_accumulation(batches, normalization, total_stats,
-                                        report_stats)
+                                        report_stats, step)
 
             if self.average_decay > 0 and i % self.average_every == 0:
                 self._update_average(step)
@@ -310,7 +311,7 @@ class Trainer(object):
                                 (self.gpu_rank, step))
                 valid_stats = self.validate(valid_iter,
                                             moving_average=self.moving_average)
-                print(self.tracking_data)
+                # print(self.tracking_data)
                 if self.gpu_verbose_level > 0:
                     logger.info('GpuRank %d: gather valid stat \
                                 step %d' % (self.gpu_rank, step))
@@ -422,18 +423,36 @@ class Trainer(object):
                     batch, outputs_B, attns_B, n_latent=self.n_latent)
 
                 # compare loss and select decoder
-                loss_A, loss_B, score_A, score_B, mask_A, mask_B = self._compare_loss(
-                    loss_A, loss_B, scores_A, scores_B, max_len)
-                loss = (loss_A + loss_B).sum()
-                score = score_A + score_B
-                batch_stats = self.valid_loss_A._stats(loss.clone(), score,
-                                                       gtruth, self.n_latent)
+                # loss_A, loss_B, score_A, score_B, mask_A, mask_B = self._compare_loss(
+                #     loss_A, loss_B, scores_A, scores_B, max_len)
+                # loss = (loss_A + loss_B).sum()
+                # score = score_A + score_B
+                # batch_stats = self.valid_loss_A._stats(loss.clone(), score,
+                #                                        gtruth, self.n_latent)
+
+                # select R(T) % instance of each decoder and masking
+                # TODO epoch , stats
+                # batch_size = tgt.size()[1]
+                # mask_A, score_mask_A = self._select_instance(
+                #     loss_A, step, batch_size, max_len)
+                # mask_B, score_mask_B = self._select_instance(
+                #     loss_B, step, batch_size, max_len)
+                # loss_A = loss_A * mask_B
+                # loss_B = loss_B * mask_A
+                # scores_A = scores_A * score_mask_B
+                # scores_B = scores_B * score_mask_A
+
+                batch_stats_A = self.valid_loss_A._stats(
+                    loss_A.sum().clone(), scores_A, gtruth, self.n_latent)
+                batch_stats_B = self.valid_loss_A._stats(
+                    loss_B.sum().clone(), scores_B, gtruth, self.n_latent)
 
                 if self.n_latent > 1:
                     batch_stats.latent_counts += latent_counts
 
                 # Update statistics.
-                stats.update(batch_stats)
+                stats.update(batch_stats_A)
+                stats.update(batch_stats_B)
 
         if moving_average:
             del valid_model
@@ -444,7 +463,7 @@ class Trainer(object):
         return stats
 
     def _gradient_accumulation(self, true_batches, normalization, total_stats,
-                               report_stats):
+                               report_stats, step):
         if self.accum_count > 1:
             self.optim.zero_grad()
 
@@ -548,21 +567,38 @@ class Trainer(object):
                     trunc_size=trunc_size,
                     n_latent=self.n_latent)
 
-                # compare loss and select decoder
-                loss_A, loss_B, score_A, score_B, mask_A, mask_B = self._compare_loss(
-                    loss_A, loss_B, scores_A, scores_B, max_len)
-                loss = (loss_A + loss_B).sum()
-                score = score_A + score_B
-                batch_stats = self.train_loss_A._stats(loss.clone(), score,
-                                                       gtruth, self.n_latent)
+                # select R(T) % instance of each decoder and masking
+                # TODO epoch , stats
+                batch_size = tgt.size()[1]
+                mask_A, score_mask_A = self._select_instance(
+                    loss_A, step, batch_size, max_len)
+                mask_B, score_mask_B = self._select_instance(
+                    loss_B, step, batch_size, max_len)
+                loss_A = loss_A * mask_B
+                loss_B = loss_B * mask_A
+                scores_A = scores_A * score_mask_B
+                scores_B = scores_B * score_mask_A
 
-                # tracking
-                self._tracking(batch.indices, mask_A, mask_B)
+                batch_stats_A = self.train_loss_A._stats(
+                    loss_A.sum().clone(), scores_A, gtruth, self.n_latent)
+                batch_stats_B = self.train_loss_A._stats(
+                    loss_B.sum().clone(), scores_B, gtruth, self.n_latent)
+
+                # # tracking
+                # self._tracking(batch.indices, mask_A, mask_B)
                 if self.n_latent > 1:
                     batch_stats.latent_counts += latent_counts
 
-                total_stats.update(batch_stats)
-                report_stats.update(batch_stats)
+                total_stats.update(batch_stats_A)
+                report_stats.update(batch_stats_A)
+                total_stats.update(batch_stats_B)
+                report_stats.update(batch_stats_B)
+
+                # TODO aggregate losses
+                divider = mask_A + mask_B
+                zero_idx = torch.where(divider == 0)
+                divider[zero_idx] = 1
+                loss = ((loss_A + loss_B) / divider).sum()
 
                 loss /= float(normalization)
                 if loss is not None:
@@ -685,3 +721,17 @@ class Trainer(object):
 
         dec_stat[0].append(mask_A.sum().item())
         dec_stat[1].append(mask_B.sum().item())
+
+    def _select_instance(self, loss, step, batch_size, max_len):
+        epoch_step = 4300
+        epoch = math.floor(step / 4300)
+        tau = 0.7
+        t_k = 10
+        r_t = 1 - tau * min(epoch / t_k, 1)  # TODO epoch define
+        instance_num = int(r_t * batch_size)
+        large_idx = torch.topk(loss, batch_size - instance_num).indices.cuda()
+        mask = torch.ones_like(loss)
+        mask[large_idx] = 0
+        score_mask = mask.repeat_interleave(max_len).unsqueeze(-1)
+
+        return mask, score_mask
