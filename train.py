@@ -102,16 +102,18 @@ def main(opt):
         producer.terminate()
 
     elif nb_gpu == 1:  # case 1 GPU only
-        trained_model_path, tracking_idx, tracking_dec = single_main(opt, 0)
+        trained_model_path, tracking_batch_A, tracking_batch_B = single_main(
+            opt, 0)
     else:  # case only CPU
-        trained_model_path, tracking_idx, tracking_dec = single_main(opt, -1)
+        trained_model_path, tracking_batch_A, tracking_batch_B = single_main(
+            opt, -1)
 
     # translate_trained_model(
     #     opt.n_latent, opt.data, opt.save_model, trained_model_path,
     #     opt.use_segments, opt.max_segments)
 
     # # save tracking
-    # save_path = '/'.join(opt.save_model.split('/')[:-1])
+    save_path = '/'.join(opt.save_model.split('/')[:-1])
     # idx_stat = json.dumps(tracking_idx)
     # with open(save_path + 'tracking_idx.json', 'w') as f:
     #     f.write(idx_stat)
@@ -130,6 +132,17 @@ def main(opt):
     #          list(range(1, 251)), tracking_dec[1][:250], 'b')
     # plt.savefig(save_path + 'dec.png')
     # plt.close()
+
+    # draw plot
+    import matplotlib.pyplot as plt
+
+    plt.plot(list(range(1, len(tracking_batch_A) + 1)), tracking_batch_A, 'g')
+    plt.savefig(save_path + 'tracking_batch_A.png')
+    plt.close()
+
+    plt.plot(list(range(1, len(tracking_batch_B) + 1)), tracking_batch_B, 'b')
+    plt.savefig(save_path + 'tracking_batch_B.png')
+    plt.close()
 
 
 def translate_trained_model(n_latent,

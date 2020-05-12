@@ -177,8 +177,12 @@ class Trainer(object):
         self.dropout = dropout
         self.dropout_steps = dropout_steps
         self.segment_token_idx = segment_token_idx
-        self.tracking_data = {i: list() for i in range(48)}
-        self.tracking_dec = {0: [], 1: []}
+        # self.tracking_data = {i: list() for i in range(48)}
+        # self.tracking_dec = {0: [], 1: []}
+        self.r_t = 1
+        self.multi_r_idxs = np.load('multi_r_idxs.npy')
+        self.tracking_batch_A = []
+        self.tracking_batch_B = []
 
         for i in range(len(self.accum_count_l)):
             assert self.accum_count_l[i] > 0
@@ -311,7 +315,7 @@ class Trainer(object):
                                 (self.gpu_rank, step))
                 valid_stats = self.validate(valid_iter,
                                             moving_average=self.moving_average)
-                # print(self.tracking_data)
+                print("Current R(T)", self.r_t)
                 if self.gpu_verbose_level > 0:
                     logger.info('GpuRank %d: gather valid stat \
                                 step %d' % (self.gpu_rank, step))
@@ -346,7 +350,7 @@ class Trainer(object):
 
         if self.model_saver is not None:
             self.model_saver.save(step, moving_average=self.moving_average)
-        return total_stats, stats_manager, self.tracking_data, self.tracking_dec
+        return total_stats, stats_manager, self.tracking_batch_A, self.tracking_batch_B
 
     def validate(self, valid_iter, moving_average=None):
         """ Validate model.
@@ -586,6 +590,8 @@ class Trainer(object):
 
                 # # tracking
                 # self._tracking(batch.indices, mask_A, mask_B)
+                self._tracking(batch.indices, mask_A, mode='A')
+                self._tracking(batch.indices, mask_B, mode='B')
                 if self.n_latent > 1:
                     batch_stats.latent_counts += latent_counts
 
@@ -710,28 +716,44 @@ class Trainer(object):
 
         return loss_A, loss_B, scores_A, scores_B, mask_A, mask_B
 
-    def _tracking(self, indices, mask_A, mask_B):
-        idx_stat = self.tracking_data
-        dec_stat = self.tracking_dec
-        for i, batch_idx in enumerate(indices):
-            if batch_idx.item() in idx_stat.keys():
-                idx_stat[batch_idx.item()].append(int(mask_A[i].item()))
-            else:
-                pass
+    # def _tracking(self, indices, mask_A, mask_B):
+    #     idx_stat = self.tracking_data
+    #     dec_stat = self.tracking_dec
+    #     for i, batch_idx in enumerate(indices):
+    #         if batch_idx.item() in idx_stat.keys():
+    #             idx_stat[batch_idx.item()].append(int(mask_A[i].item()))
+    #         else:
+    #             pass
 
-        dec_stat[0].append(mask_A.sum().item())
-        dec_stat[1].append(mask_B.sum().item())
+    #     dec_stat[0].append(mask_A.sum().item())
+    #     dec_stat[1].append(mask_B.sum().item())
 
     def _select_instance(self, loss, step, batch_size, max_len):
         epoch_step = 4300
         epoch = math.floor(step / 4300)
         tau = 0.7
         t_k = 10
-        r_t = 1 - tau * min(epoch / t_k, 1)  # TODO epoch define
-        instance_num = int(r_t * batch_size)
+        self.r_t = 1 - tau * min(epoch / t_k, 1)  # TODO epoch define
+        instance_num = int(self.r_t * batch_size)
         large_idx = torch.topk(loss, batch_size - instance_num).indices.cuda()
         mask = torch.ones_like(loss)
         mask[large_idx] = 0
         score_mask = mask.repeat_interleave(max_len).unsqueeze(-1)
 
         return mask, score_mask
+
+    def _tracking(self, indices, mask, mode='A'):
+        selected_idxs = torch.where(mask != 0)
+        selected_idxs = indices[selected_idxs]
+        selected_size = len(selected_idxs)
+        cnt = 0
+        for i, batch_idx in enumerate(selected_idxs):
+            if batch_idx.item() in self.multi_r_idxs:
+                cnt += 1
+            else:
+                pass
+        ratio = cnt / selected_size
+        if mode == 'A':
+            self.tracking_batch_A.append(ratio)
+        else:
+            self.tracking_batch_B.append(ratio)

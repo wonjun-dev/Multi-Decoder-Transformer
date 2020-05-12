@@ -41,12 +41,14 @@ for l in ${latent[@]}; do
             fi
         done < ${summ_path}
         echo $best_model_path
-        CUDA_VISIBLE_DEVICES=${device} python translate.py -model ${best_model_path} -src data/${dataset}/src-test.txt -output_dir experiments/${dataset}_${model_name}_${l}_${p}_${seed}/preds/ -beam_size=50 -gpu 0 -batch_size=20 -n_best=50 -log_probs -n_translate_latent ${l}
+        CUDA_VISIBLE_DEVICES=${device} python translate.py -model ${best_model_path} -src data/${dataset}/src-test.txt -output_dir experiments/${dataset}_${model_name}_${l}_${p}_${seed}/preds/ -beam_size=50 -gpu 0 -batch_size=20 -n_best=50 -log_probs -n_translate_latent ${l} -planb
         # CUDA_VISIBLE_DEVICES=${device} python translate.py -model ${best_model_path} -src data/${dataset}/src-test-dummy.txt -output_dir experiments/${dataset}_${model_name}_${l}_${p}_${seed}/preds_dummy/ -beam_size=10 -gpu 0 -batch_size=100 -n_best=10 -log_probs -n_translate_latent ${l}
 
         # Parse and Save "seed.csv"
         if [ ${l} -eq 0 ]; then
-            python parse/parse_output.py -input_file experiments/${dataset}_${model_name}_${l}_${p}_${seed}/preds/output -target_file data/${dataset}/tgt-test.txt -beam_size 50 -result_path experiments/results/${dataset}_${model_name}_${l}_${p}/ -seed ${seed}
+            python parse/parse_output.py -input_file experiments/${dataset}_${model_name}_${l}_${p}_${seed}/preds/output_0 -target_file data/${dataset}/tgt-test.txt -beam_size 50 -result_path experiments/results/${dataset}_${model_name}_${l}_${p}_A/ -seed ${seed}
+            python parse/parse_output.py -input_file experiments/${dataset}_${model_name}_${l}_${p}_${seed}/preds/output_1 -target_file data/${dataset}/tgt-test.txt -beam_size 50 -result_path experiments/results/${dataset}_${model_name}_${l}_${p}_B/ -seed ${seed}
+            python parse/parse_output.py -input_dir experiments/${dataset}_${model_name}_${l}_${p}_${seed}/preds/ -target_file data/${dataset}/tgt-test.txt -beam_size 50 -n_latent 2 -result_path experiments/results/${dataset}_${model_name}_${l}_${p}_E/ -seed ${seed} # ensemble
             # python parse/parse_output.py -input_file experiments/${dataset}_${model_name}_${l}_${p}_${seed}/preds_dummy/output -target_file data/${dataset}/tgt-test.txt -beam_size 50
         elif [ ${l} -eq 2 ]; then
             python parse/parse_output.py -input_dir experiments/${dataset}_${model_name}_${l}_${p}_${seed}/preds/ -target_file data/${dataset}/tgt-test.txt -beam_size 50 -n_latent 2 -result_path experiments/results/${dataset}_${model_name}_${l}_${p}/ -seed ${seed}
@@ -57,12 +59,12 @@ for l in ${latent[@]}; do
 done
 
 # Check whether all seeds are dene. if done, save "avg.csv"
-
+: << "END"
 for l in ${latent[@]}; do
     for p in ${dropout[@]}; do
         python run_average.py -target_dir experiments/results/${dataset}_${model_name}_${l}_${p}/
     done
 done
-
+END
 
 

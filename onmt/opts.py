@@ -23,6 +23,11 @@ def model_opts(parser):
     These options are passed to the construction of the model.
     Be careful with these as they will be used during translation.
     """
+    group = parser.add_argument_group('Model-PlanB')
+    group.add('--planb',
+              '-planb',
+              action='store_true',
+              help='reuse unused ground_truth')
 
     # Embedding Options
     group = parser.add_argument_group('Model-Embeddings')
@@ -949,6 +954,11 @@ def train_opts(parser):
 
 
 def translate_opts(parser):
+    group = parser.add_argument_group('Model-PlanB')
+    group.add('--planb',
+              '-planb',
+              action='store_true',
+              help='reuse unused ground_truth')
     """ Translation / inference options """
     group = parser.add_argument_group('Model')
     group.add('--model',

@@ -57,9 +57,13 @@ def main(opt):
                 if opt.tgt is not None else repeat(None)
             shard_pairs = zip(src_shards, tgt_shards)
     else:
-        output_path = opt.output_dir + '/output'
+        output_path = opt.output_dir + '/output_0'
         out_file = codecs.open(output_path, 'w+', 'utf-8')
         translator.out_file = out_file
+        if opt.planb:
+            output_path_bk = opt.output_dir + '/output_1'
+            out_file_bk = codecs.open(output_path_bk, 'w+', 'utf-8')
+            translator.out_file_bk = out_file_bk
 
         for i, (src_shard, tgt_shard) in enumerate(shard_pairs):
             logger.info("Translating shard %d." % i)

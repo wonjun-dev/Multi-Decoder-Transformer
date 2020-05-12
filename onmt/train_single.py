@@ -164,7 +164,7 @@ def main(opt, device_id, batch_queue=None, semaphore=None):
         logger.warning("Option single_pass is enabled, ignoring train_steps.")
         train_steps = 0
 
-    total_stats, stats_manager, tracking_idx, tracking_dec = trainer.train(
+    total_stats, stats_manager, tracking_batch_A, tracking_batch_B = trainer.train(
         train_iter,
         train_steps,
         save_checkpoint_steps=opt.save_checkpoint_steps,
@@ -184,4 +184,4 @@ def main(opt, device_id, batch_queue=None, semaphore=None):
     if opt.tensorboard:
         trainer.report_manager.tensorboard_writer.close()
 
-    return best_model_path, tracking_idx, tracking_dec
+    return best_model_path, tracking_batch_A, tracking_batch_B
