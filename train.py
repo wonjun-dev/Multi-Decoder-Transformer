@@ -134,15 +134,15 @@ def main(opt):
     # plt.close()
 
     # draw plot
-    import matplotlib.pyplot as plt
+    # import matplotlib.pyplot as plt
 
-    plt.plot(list(range(1, len(tracking_batch_A) + 1)), tracking_batch_A, 'g')
-    plt.savefig(save_path + 'tracking_batch_A.png')
-    plt.close()
+    # plt.plot(list(range(1, len(tracking_batch_A) + 1)), tracking_batch_A, 'g')
+    # plt.savefig(save_path + 'tracking_batch_A.png')
+    # plt.close()
 
-    plt.plot(list(range(1, len(tracking_batch_B) + 1)), tracking_batch_B, 'b')
-    plt.savefig(save_path + 'tracking_batch_B.png')
-    plt.close()
+    # plt.plot(list(range(1, len(tracking_batch_B) + 1)), tracking_batch_B, 'b')
+    # plt.savefig(save_path + 'tracking_batch_B.png')
+    # plt.close()
 
 
 def translate_trained_model(n_latent,

@@ -315,7 +315,7 @@ class Trainer(object):
                                 (self.gpu_rank, step))
                 valid_stats = self.validate(valid_iter,
                                             moving_average=self.moving_average)
-                print("Current R(T)", self.r_t)
+                # print("Current R(T)", self.r_t)
                 if self.gpu_verbose_level > 0:
                     logger.info('GpuRank %d: gather valid stat \
                                 step %d' % (self.gpu_rank, step))
@@ -417,7 +417,7 @@ class Trainer(object):
                         latent_counts[i] = torch.sum(max_latent == i).item()
                 else:
                     # F-prop through the model.
-                    outputs_A, outputs_B, attns_A, attns_B = valid_model(
+                    outputs_A, outputs_B, attns_A, attns_B, rout_prob = valid_model(
                         src, tgt, src_lengths, segment_input=segment_input)
 
                 # Compute loss.
@@ -425,6 +425,21 @@ class Trainer(object):
                     batch, outputs_A, attns_A, n_latent=self.n_latent)
                 loss_B, scores_B, gtruth, max_len, batch_stats_B = self.valid_loss_B(
                     batch, outputs_B, attns_B, n_latent=self.n_latent)
+
+                # TODO Binary routing
+                binary_routing = (rout_prob > 0.5).float()
+                loss = binary_routing[:,
+                                      0] * loss_A + binary_routing[:,
+                                                                   1] * loss_B
+                scores_A_mask = binary_routing[:, 0].repeat_interleave(
+                    max_len).unsqueeze(-1)
+                scores_B_mask = binary_routing[:, 1].repeat_interleave(
+                    max_len).unsqueeze(-1)
+                scores_A = scores_A * scores_A_mask
+                scores_B = scores_B * scores_B_mask
+                scores = scores_A + scores_B
+                gtruth_A = gtruth * scores_A_mask.unsqueeze(
+                    -1) + gtruth * scores_B_mask.unsqueeze(-1)
 
                 # compare loss and select decoder
                 # loss_A, loss_B, score_A, score_B, mask_A, mask_B = self._compare_loss(
@@ -447,16 +462,17 @@ class Trainer(object):
                 # scores_B = scores_B * score_mask_A
 
                 batch_stats_A = self.valid_loss_A._stats(
-                    loss_A.sum().clone(), scores_A, gtruth, self.n_latent)
-                batch_stats_B = self.valid_loss_A._stats(
-                    loss_B.sum().clone(), scores_B, gtruth, self.n_latent)
+                    loss.sum().clone(), scores, gtruth, self.n_latent)
+                # batch_stats_B = self.valid_loss_A._stats(
+                #     (binary_routing[:, 1] * loss_B).sum().clone(), scores_B,
+                #     gtruth, self.n_latent)
 
                 if self.n_latent > 1:
                     batch_stats.latent_counts += latent_counts
 
                 # Update statistics.
                 stats.update(batch_stats_A)
-                stats.update(batch_stats_B)
+                # stats.update(batch_stats_B)
 
         if moving_average:
             del valid_model
@@ -537,7 +553,7 @@ class Trainer(object):
                     for i in range(self.n_latent):
                         latent_counts[i] = torch.sum(max_latent == i).item()
                 else:
-                    outputs_A, outputs_B, attns_A, attns_B = self.model(
+                    outputs_A, outputs_B, attns_A, attns_B, rout_prob = self.model(
                         src,
                         tgt,
                         src_lengths,
@@ -571,27 +587,36 @@ class Trainer(object):
                     trunc_size=trunc_size,
                     n_latent=self.n_latent)
 
-                # select R(T) % instance of each decoder and masking
-                # TODO epoch , stats
-                batch_size = tgt.size()[1]
-                mask_A, score_mask_A = self._select_instance(
-                    loss_A, step, batch_size, max_len)
-                mask_B, score_mask_B = self._select_instance(
-                    loss_B, step, batch_size, max_len)
-                loss_A = loss_A * mask_B
-                loss_B = loss_B * mask_A
-                scores_A = scores_A * score_mask_B
-                scores_B = scores_B * score_mask_A
+                reg = (loss_A - loss_B)**2
+                loss = rout_prob[:,
+                                 0] * loss_A + rout_prob[:,
+                                                         1] * loss_B + 0.1 * reg
+
+                # # select R(T) % instance of each decoder and masking
+                # # TODO epoch , stats
+                # batch_size = tgt.size()[1]
+                # mask_A, score_mask_A = self._select_instance(
+                #     loss_A, step, batch_size, max_len)
+                # mask_B, score_mask_B = self._select_instance(
+                #     loss_B, step, batch_size, max_len)
+                # loss_A = loss_A * mask_B
+                # loss_B = loss_B * mask_A
+                # scores_A = scores_A * score_mask_B
+                # scores_B = scores_B * score_mask_A
+                # print(scores_A.shape)  # (max_len * bs, vocab)
+                # print(gtruth.shape)  # (max_len * bs)
 
                 batch_stats_A = self.train_loss_A._stats(
-                    loss_A.sum().clone(), scores_A, gtruth, self.n_latent)
+                    (rout_prob[:, 0] * loss_A).sum().clone(), scores_A, gtruth,
+                    self.n_latent)
                 batch_stats_B = self.train_loss_A._stats(
-                    loss_B.sum().clone(), scores_B, gtruth, self.n_latent)
+                    (rout_prob[:, 1] * loss_B).sum().clone(), scores_B, gtruth,
+                    self.n_latent)
 
-                # # tracking
-                # self._tracking(batch.indices, mask_A, mask_B)
-                self._tracking(batch.indices, mask_A, mode='A')
-                self._tracking(batch.indices, mask_B, mode='B')
+                # # # tracking
+                # # self._tracking(batch.indices, mask_A, mask_B)
+                # self._tracking(batch.indices, mask_A, mode='A')
+                # self._tracking(batch.indices, mask_B, mode='B')
                 if self.n_latent > 1:
                     batch_stats.latent_counts += latent_counts
 
@@ -600,12 +625,12 @@ class Trainer(object):
                 total_stats.update(batch_stats_B)
                 report_stats.update(batch_stats_B)
 
-                # TODO aggregate losses
-                divider = mask_A + mask_B
-                zero_idx = torch.where(divider == 0)
-                divider[zero_idx] = 1
-                loss = ((loss_A + loss_B) / divider).sum()
-
+                # # TODO aggregate losses
+                # divider = mask_A + mask_B
+                # zero_idx = torch.where(divider == 0)
+                # divider[zero_idx] = 1
+                # loss = ((loss_A + loss_B) / divider).sum()
+                loss = loss.sum()
                 loss /= float(normalization)
                 if loss is not None:
                     self.optim.backward(loss)

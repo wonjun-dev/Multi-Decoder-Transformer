@@ -3,7 +3,7 @@
 dataset=USPTO-50k_no_rxn_aug_2_set_aug
 latent=(0)
 dropout=(0.25)
-model_name=comm
+model_name=rout_reg
 device=$1
 seed=$2
 
@@ -15,7 +15,7 @@ for l in ${latent[@]}; do
         # Train
         CUDA_VISIBLE_DEVICES="${device}" python  train.py -data data/${dataset}/${dataset} \
                 -save_model experiments/${dataset}_${model_name}_${l}_${p}_${seed} \
-                -gpu_ranks 0 -save_checkpoint_steps 1000  -keep_checkpoint 16 \
+                -gpu_ranks 0 -save_checkpoint_steps 1000  -keep_checkpoint 25 \
                 -train_steps 200000 -valid_steps 1000 -report_every 1000 -param_init 0  -param_init_glorot \
                 -batch_size 32 -batch_type sents -normalization sents -max_grad_norm 0  -accum_count 4 \
                 -optim adam -adam_beta1 0.9 -adam_beta2 0.998 -decay_method noam -warmup_steps 8000  \

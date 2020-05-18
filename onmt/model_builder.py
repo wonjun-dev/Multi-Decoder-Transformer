@@ -18,6 +18,7 @@ from onmt.modules.util_class import Cast
 from onmt.utils.misc import use_gpu
 from onmt.utils.logging import logger
 from onmt.utils.parse import ArgumentParser
+from onmt.models.model import Router
 
 
 def build_embeddings(opt, text_field, for_encoder=True):
@@ -131,6 +132,8 @@ def build_base_model(model_opt, fields, gpu, checkpoint=None, gpu_id=None):
     Returns:
         the NMTModel.
     """
+    # Build Router
+    router = Router()
 
     # Build embeddings.
     if model_opt.model_type == "text" or model_opt.model_type == "vec":
@@ -164,7 +167,7 @@ def build_base_model(model_opt, fields, gpu, checkpoint=None, gpu_id=None):
         device = torch.device("cuda")
     elif not gpu:
         device = torch.device("cpu")
-    model = onmt.models.NMTModel(encoder, decoder_A, decoder_B)
+    model = onmt.models.NMTModel(encoder, decoder_A, decoder_B, router)
 
     model.n_latent = model_opt.n_latent
 

@@ -18,6 +18,8 @@ from onmt.translate.beam_search import BeamSearch
 from onmt.translate.random_sampling import RandomSampling
 from onmt.utils.misc import tile, set_random_seed
 from onmt.modules.copy_generator import collapse_copy_scores
+import onmt.opts as opts
+import numpy as np
 
 import pdb
 
@@ -133,7 +135,8 @@ class Translator(object):
                  segment_token_idx=None,
                  planb=False,
                  out_file_bk=None,
-                 model_opt=None):
+                 model_opt=None,
+                 output_dir=None):
         self.model = model
         self.fields = fields
         tgt_field = dict(self.fields)["tgt"].base_field
@@ -197,7 +200,10 @@ class Translator(object):
 
         self.planb = planb
         self.out_file_bk = out_file_bk
-        self.opt = model_opt
+        self.output_dir = output_dir
+        # for routing
+        self.rout = []
+        self.batch_idx = []
 
         # for debugging
         self.beam_trace = self.dump_beam != ""
@@ -273,7 +279,8 @@ class Translator(object):
                    seed=opt.seed,
                    segment_token_idx=opt.segment_token_idx,
                    planb=opt.planb,
-                   model_opt=model_opt)
+                   model_opt=model_opt,
+                   output_dir=opt.output_dir)
 
     def _log(self, msg):
         if self.logger:
@@ -331,13 +338,14 @@ class Translator(object):
             sort_key=inputters.str2sortkey[self.data_type],
             filter_pred=self._filter_pred)
 
-        data_iter = inputters.OrderedIterator(dataset=data,
-                                              device=self._dev,
-                                              batch_size=batch_size,
-                                              train=False,
-                                              sort=False,
-                                              sort_within_batch=True,
-                                              shuffle=False)
+        data_iter = inputters.OrderedIterator(
+            dataset=data,
+            device=self._dev,
+            batch_size=batch_size,
+            train=False,
+            sort=False,
+            sort_within_batch=False,
+            shuffle=False)  # change sort_within_batch True to False
 
         xlation_builder = onmt.translate.TranslationBuilder(
             data, self.fields, self.n_best, self.replace_unk, tgt,
@@ -461,6 +469,11 @@ class Translator(object):
             import json
             json.dump(self.translator.beam_accum,
                       codecs.open(self.dump_beam, 'w', 'utf-8'))
+
+        # save routing numpy
+        np.save(self.output_dir + 'routing.npy', self.rout)
+        np.save(self.output_dir + 'batch_idx.npy', self.batch_idx)
+
         return all_scores, all_predictions
 
     def _translate_random_sampling(self,
@@ -595,6 +608,14 @@ class Translator(object):
                                .fill_(memory_bank.size(0))
         return src, enc_states, memory_bank, src_lengths
 
+    def _run_router(self, memory_bank):
+        avg_emb = torch.mean(memory_bank,
+                             dim=0)  # memory_bank (max_len, bs, 256)
+        rout_prob = self.model.router(avg_emb)  # (bs, 2)
+        binary_routing = 1 - (rout_prob > 0.5).float()[:, 0]
+        binary_routing = binary_routing.cpu().numpy()
+        return binary_routing
+
     def _decode_and_generate(self,
                              decoder_in,
                              memory_bank,
@@ -680,12 +701,17 @@ class Translator(object):
         use_src_map = self.copy_attn
         beam_size = self.beam_size
         batch_size = batch.batch_size
+        self.batch_idx.append(batch.indices.cpu().numpy())
 
         # (1) Run the encoder on the src.
         src, enc_states, memory_bank, src_lengths = self._run_encoder(batch)
         memory_bank_copy = memory_bank.clone()
         self.model.decoder_A.init_state(src, memory_bank, enc_states)
         self.model.decoder_B.init_state(src, memory_bank, enc_states)
+
+        # routing
+        rout = self._run_router(memory_bank_copy)
+        self.rout.append(rout)
 
         results = {
             "predictions":
