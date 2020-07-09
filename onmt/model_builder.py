@@ -106,7 +106,7 @@ def load_test_model(opt, model_path=None):
         fields = vocab
 
     model = build_base_model(model_opt, fields, use_gpu(opt), checkpoint,
-                             opt.gpu)
+                             opt.gpu, mode='test')
     if opt.fp32:
         model.float()
     model.eval()
@@ -114,7 +114,8 @@ def load_test_model(opt, model_path=None):
     return fields, model, model_opt
 
 
-def build_base_model(model_opt, fields, gpu, checkpoint=None, gpu_id=None):
+def build_base_model(model_opt, fields, gpu, checkpoint=None, gpu_id=None,
+        mode='train'):
     """Build a model from opts.
 
     Args:
@@ -144,17 +145,20 @@ def build_base_model(model_opt, fields, gpu, checkpoint=None, gpu_id=None):
 
     # Build decoder.
     tgt_field = fields["tgt"]
-    tgt_emb = build_embeddings(model_opt, tgt_field, for_encoder=False)
+    if not model_opt.binary_clf:
+        tgt_emb = build_embeddings(model_opt, tgt_field, for_encoder=False)
 
-    # Share the embedding matrix - preprocess with share_vocab required.
-    if model_opt.share_embeddings:
-        # src/tgt vocab should be the same if `-share_vocab` is specified.
-        assert src_field.base_field.vocab == tgt_field.base_field.vocab, \
-            "preprocess with -share_vocab if you use share_embeddings"
+        # Share the embedding matrix - preprocess with share_vocab required.
+        if model_opt.share_embeddings:
+            # src/tgt vocab should be the same if `-share_vocab` is specified.
+            assert src_field.base_field.vocab == tgt_field.base_field.vocab, \
+                "preprocess with -share_vocab if you use share_embeddings"
 
-        tgt_emb.word_lut.weight = src_emb.word_lut.weight
+            tgt_emb.word_lut.weight = src_emb.word_lut.weight
 
-    decoder = build_decoder(model_opt, tgt_emb)
+        decoder = build_decoder(model_opt, tgt_emb)
+    else:
+        decoder = build_decoder(model_opt, src_emb)
 
     # Build NMTModel(= encoder + decoder).
     if gpu and gpu_id is not None:
@@ -169,18 +173,83 @@ def build_base_model(model_opt, fields, gpu, checkpoint=None, gpu_id=None):
 
     # Build Generator.
     if not model_opt.copy_attn:
-        if model_opt.generator_function == "sparsemax":
-            gen_func = onmt.modules.sparse_activations.LogSparsemax(dim=-1)
+        if model_opt.binary_clf:
+            print(model_opt.n_gen_layer)
+            print(model_opt.n_smiles_aug)
+            input()
+            layers = []
+            in_dim = model_opt.dec_rnn_size
+            out_dim = model_opt.dec_rnn_size
+            layers.append(nn.Dropout(model_opt.dropout[0]))
+            for _ in range(model_opt.n_gen_layer-1):
+                layers.append(nn.Linear(in_dim, out_dim))
+                layers.append(nn.ReLU())
+                layers.append(nn.Dropout(model_opt.dropout[0]))
+                in_dim = out_dim
+            layers.append(nn.Linear(in_dim, 1))
+            #layers.append(nn.LogSoftmax(dim=-1))
+            generator = nn.Sequential(*layers)
+            #generator = nn.Sequential(
+            #    nn.Dropout(model_opt.dropout[0]),
+            #    nn.Linear(model_opt.dec_rnn_size, 1),
+            #    Cast(torch.float32)
+            #)
+        elif model_opt.pretrain_neighbor or model_opt.pretrain_attr or model_opt.contrastive:
+            generator = {}
+            if model_opt.pretrain_neighbor:
+                layers = []
+                in_dim = model_opt.dec_rnn_size * 2
+                out_dim = model_opt.dec_rnn_size
+                for _ in range(model_opt.n_gen_layer-1):
+                    layers.append(nn.Linear(in_dim, out_dim))
+                    layers.append(nn.ReLU())
+                    layers.append(nn.Dropout(model_opt.dropout[0]))
+                    in_dim = out_dim
+                layers.append(nn.Linear(in_dim, 1))
+                generator['neighbor'] = nn.Sequential(*layers)
+            if model_opt.pretrain_attr:
+                for feat_name, d_out in [('valence', 10), ('degree', 8),
+                    ('atomic', 118), ('is_aromatic', 2), ('num_h', 8),
+                    ('formal_charge', 10), ('adj', 5), ('khop', 5)]:
+                    in_dim = model_opt.dec_rnn_size
+                    if feat_name in ['adj', 'khop']:
+                        in_dim = 2 * in_dim
+                    out_dim = model_opt.dec_rnn_size
+                    layers = []
+                    for _ in range(model_opt.n_gen_layer-1):
+                        layers.append(nn.Linear(in_dim, out_dim))
+                        layers.append(nn.ReLU())
+                        layers.append(nn.Dropout(model_opt.dropout[0]))
+                        in_dim = out_dim
+                    layers.append(nn.Linear(in_dim, d_out))
+                    layers.append(nn.LogSoftmax(dim=-1))
+                    generator[feat_name] = nn.Sequential(*layers)
+            if model_opt.contrastive:
+                assert model_opt.n_smiles_aug > 1
+                layers = []
+                in_dim = model_opt.dec_rnn_size
+                out_dim = model_opt.dec_rnn_size
+                for _ in range(model_opt.n_gen_layer-1):
+                    layers.append(nn.Linear(in_dim, out_dim))
+                    layers.append(nn.ReLU())
+                    layers.append(nn.Dropout(model_opt.dropout[0]))
+                    in_dim = out_dim
+                layers.append(nn.Linear(in_dim, out_dim))
+                generator['contrastive'] = nn.Sequential(*layers)
+            generator = nn.ModuleDict(generator)
         else:
-            gen_func = nn.LogSoftmax(dim=-1)
-        generator = nn.Sequential(
-            nn.Linear(model_opt.dec_rnn_size,
-                      len(fields["tgt"].base_field.vocab)),
-            Cast(torch.float32),
-            gen_func
-        )
-        if model_opt.share_decoder_embeddings:
-            generator[0].weight = decoder.embeddings.word_lut.weight
+            if model_opt.generator_function == "sparsemax":
+                gen_func = onmt.modules.sparse_activations.LogSparsemax(dim=-1)
+            else:
+                gen_func = nn.LogSoftmax(dim=-1)
+            generator = nn.Sequential(
+                nn.Linear(model_opt.dec_rnn_size,
+                          len(fields["tgt"].base_field.vocab)),
+                Cast(torch.float32),
+                gen_func
+            )
+            if model_opt.share_decoder_embeddings:
+                generator[0].weight = decoder.embeddings.word_lut.weight
     else:
         tgt_base_field = fields["tgt"].base_field
         vocab_size = len(tgt_base_field.vocab)
@@ -202,7 +271,21 @@ def build_base_model(model_opt, fields, gpu, checkpoint=None, gpu_id=None):
         # end of patch for backward compatibility
 
         model.load_state_dict(checkpoint['model'], strict=False)
-        generator.load_state_dict(checkpoint['generator'], strict=False)
+        if mode == 'test' or model_opt.pretrain_neighbor:
+            generator.load_state_dict(checkpoint['generator'], strict=False)
+        else:
+            if model_opt.param_init != 0.0:
+                #for p in model.decoder.parameters():
+                #    p.data.uniform_(-model_opt.param_init, model_opt.param_init)
+                for p in generator.parameters():
+                    p.data.uniform_(-model_opt.param_init, model_opt.param_init)
+            if model_opt.param_init_glorot:
+                #for p in model.decoder.parameters():
+                #    if p.dim() > 1:
+                #        xavier_uniform_(p)
+                for p in generator.parameters():
+                    if p.dim() > 1:
+                        xavier_uniform_(p)
     else:
         if model_opt.param_init != 0.0:
             for p in model.parameters():

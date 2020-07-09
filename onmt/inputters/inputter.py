@@ -25,6 +25,7 @@ from onmt.inputters.image_dataset import (  # noqa: F401
 
 import gc
 import pdb
+import random
 
 
 # monkey-patch to make torchtext Vocab's pickleable
@@ -68,7 +69,11 @@ def get_fields(
     eos='</s>',
     dynamic_dict=False,
     src_truncate=None,
-    tgt_truncate=None
+    tgt_truncate=None,
+    get_adj=False,
+    get_attr=False,
+    get_new2canon=False,
+    with_tgt=True
 ):
     """
     Args:
@@ -113,15 +118,17 @@ def get_fields(
                         "base_name": "src"}
     fields["src"] = fields_getters[src_data_type](**src_field_kwargs)
 
-    tgt_field_kwargs = {"n_feats": n_tgt_feats,
-                        "include_lengths": False,
-                        "pad": pad, "bos": bos, "eos": eos,
-                        "truncate": tgt_truncate,
-                        "base_name": "tgt"}
-    fields["tgt"] = fields_getters["text"](**tgt_field_kwargs)
+    if with_tgt:
+        tgt_field_kwargs = {"n_feats": n_tgt_feats,
+                            "include_lengths": False,
+                            "pad": pad, "bos": bos, "eos": eos,
+                            "truncate": tgt_truncate,
+                            "base_name": "tgt"}
+        fields["tgt"] = fields_getters["text"](**tgt_field_kwargs)
 
     indices = Field(use_vocab=False, dtype=torch.long, sequential=False)
     fields["indices"] = indices
+
 
     if dynamic_dict:
         src_map = Field(
@@ -136,6 +143,21 @@ def get_fields(
             use_vocab=False, dtype=torch.long,
             postprocessing=make_tgt, sequential=False)
         fields["alignment"] = align
+    if get_adj:
+        fields['adj'] = vec_fields(pad_index=-1, include_lengths=False,
+                for_adj=True)
+        fields['khop'] = vec_fields(pad_index=-1, include_lengths=False,
+                for_adj=True)
+    if get_attr: # categorial attribute of token n_token x n_feats x 1(=feat_dim)
+        fields['valence'] = vec_fields(pad_index=-1, include_lengths=False)
+        fields['degree'] = vec_fields(pad_index=-1, include_lengths=False)
+        fields['atomic'] = vec_fields(pad_index=-1, include_lengths=False)
+        fields['is_aromatic'] = vec_fields(pad_index=-1, include_lengths=False)
+        fields['num_h'] = vec_fields(pad_index=-1, include_lengths=False)
+        fields['formal_charge'] = vec_fields(pad_index=-1, include_lengths=False)
+    if get_new2canon: # map from new2canonical smiles n_token x 1 x 1
+        fields['new2canon'] = vec_fields(pad_index=-1, include_lengths=False)
+
 
     return fields
 
@@ -265,7 +287,8 @@ def filter_example(ex, use_src_len=True, use_tgt_len=True,
     """
 
     src_len = len(ex.src[0])
-    tgt_len = len(ex.tgt[0])
+    if use_tgt_len:
+        tgt_len = len(ex.tgt[0])
     return (not use_src_len or min_src_len <= src_len <= max_src_len) and \
         (not use_tgt_len or min_tgt_len <= tgt_len <= max_tgt_len)
 
@@ -523,11 +546,36 @@ def batch_iter(data, batch_size, batch_size_fn=None, batch_size_multiple=1):
         yield minibatch
 
 
+def batch(data, batch_size, batch_size_fn=None, shuffle=False):
+    """Yield elements from data in chunks of batch_size."""
+    if batch_size_fn is None:
+        def batch_size_fn(new, count, sofar):
+            return count
+    minibatch, size_so_far = [], 0
+    n_data = len(data)
+    iter_ind = list(range(n_data))
+    if shuffle:
+        random.shuffle(iter_ind)
+    #for ex in data:
+    for idx in iter_ind:
+        ex = data[idx]
+        minibatch.append(ex)
+        size_so_far = batch_size_fn(ex, len(minibatch), size_so_far)
+        if size_so_far == batch_size:
+            yield minibatch
+            minibatch, size_so_far = [], 0
+        elif size_so_far > batch_size:
+            yield minibatch[:-1]
+            minibatch, size_so_far = minibatch[-1:], batch_size_fn(ex, 1, 0)
+    if minibatch:
+        yield minibatch
+
+
 def _pool(data, batch_size, batch_size_fn, batch_size_multiple,
-          sort_key, random_shuffler, pool_factor):
-    for p in torchtext.data.batch(
+          sort_key, random_shuffler, pool_factor, shuffle=False):
+    for p in batch(
             data, batch_size * pool_factor,
-            batch_size_fn=batch_size_fn):
+            batch_size_fn=batch_size_fn, shuffle=shuffle):
         p_batch = list(batch_iter(
             sorted(p, key=sort_key),
             batch_size,
@@ -551,6 +599,7 @@ class OrderedIterator(torchtext.data.Iterator):
         self.yield_raw_example = yield_raw_example
         self.dataset = dataset
         self.pool_factor = pool_factor
+        self.shuffle = False
 
     def create_batches(self):
         if self.train:
@@ -568,15 +617,25 @@ class OrderedIterator(torchtext.data.Iterator):
                     self.batch_size_multiple,
                     self.sort_key,
                     self.random_shuffler,
-                    self.pool_factor)
+                    self.pool_factor,
+                    shuffle=True)
         else:
             self.batches = []
-            for b in batch_iter(
-                    self.data(),
-                    self.batch_size,
-                    batch_size_fn=self.batch_size_fn,
-                    batch_size_multiple=self.batch_size_multiple):
-                self.batches.append(sorted(b, key=self.sort_key))
+            self.batches = _pool(
+                self.data(),
+                self.batch_size,
+                self.batch_size_fn,
+                self.batch_size_multiple,
+                self.sort_key,
+                self.random_shuffler,
+                self.pool_factor,
+                shuffle=False)
+            #for b in batch_iter(
+            #        self.data(),
+            #        self.batch_size,
+            #        batch_size_fn=self.batch_size_fn,
+            #        batch_size_multiple=self.batch_size_multiple):
+            #    self.batches.append(sorted(b, key=self.sort_key))
 
     def __iter__(self):
         """
@@ -623,9 +682,13 @@ class MultipleDatasetIterator(object):
                  opt):
         self.index = -1
         self.iterables = []
+        self.n_data = 0
         for shard in train_shards:
             self.iterables.append(
                 build_dataset_iter(shard, fields, opt, multi=True))
+            self.n_data += len(shard)
+            print(shard)
+            input(str(self.n_data))
         self.init_iterators = True
         self.weights = opt.data_weights
         self.batch_size = opt.batch_size
@@ -662,7 +725,7 @@ class MultipleDatasetIterator(object):
                     self.batch_size_multiple,
                     self.sort_key,
                     self.random_shuffler,
-                    self.pool_factor):
+                    self.pool_factor, shuffle=True):
                 minibatch = sorted(minibatch, key=self.sort_key, reverse=True)
                 yield torchtext.data.Batch(minibatch,
                                            self.iterables[0].dataset,
@@ -684,7 +747,8 @@ class DatasetLazyIter(object):
 
     def __init__(self, dataset_paths, fields, batch_size, batch_size_fn,
                  batch_size_multiple, device, is_train, pool_factor,
-                 repeat=True, num_batches_multiple=1, yield_raw_example=False):
+                 repeat=True, num_batches_multiple=1, yield_raw_example=False,
+                 n_smiles_aug=1):
         self._paths = dataset_paths
         self.fields = fields
         self.batch_size = batch_size
@@ -696,10 +760,12 @@ class DatasetLazyIter(object):
         self.num_batches_multiple = num_batches_multiple
         self.yield_raw_example = yield_raw_example
         self.pool_factor = pool_factor
+        self.n_smiles_aug = n_smiles_aug
 
     def _iter_dataset(self, path):
         logger.info('Loading dataset from %s' % path)
         cur_dataset = torch.load(path)
+        cur_dataset.n_smiles_aug = self.n_smiles_aug
         logger.info('number of examples: %d' % len(cur_dataset))
         cur_dataset.fields = self.fields
         cur_iter = OrderedIterator(
@@ -807,7 +873,8 @@ def build_dataset_iter(corpus_type, fields, opt, is_train=True, multi=False):
         opt.pool_factor,
         repeat=not opt.single_pass,
         num_batches_multiple=max(opt.accum_count) * opt.world_size,
-        yield_raw_example=multi)
+        yield_raw_example=multi,
+        n_smiles_aug=opt.n_smiles_aug)
 
 
 def build_dataset_iter_multiple(train_shards, fields, opt):

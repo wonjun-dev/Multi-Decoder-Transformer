@@ -46,10 +46,10 @@ class TransformerEncoderLayer(nn.Module):
             * outputs ``(batch_size, src_len, model_dim)``
         """
         input_norm = self.layer_norm(inputs)
-        context, _ = self.self_attn(input_norm, input_norm, input_norm,
+        context, attns = self.self_attn(input_norm, input_norm, input_norm,
                                     mask=mask, attn_type="self")
         out = self.dropout(context) + inputs
-        return self.feed_forward(out)
+        return self.feed_forward(out), attns
 
     def update_dropout(self, dropout):
         self.self_attn.update_dropout(dropout)
@@ -112,7 +112,7 @@ class TransformerEncoder(EncoderBase):
             embeddings,
             opt.max_relative_positions)
 
-    def forward(self, src, lengths=None):
+    def forward(self, src, lengths=None, with_attn=False):
         """See :func:`EncoderBase.forward()`"""
         self._check_args(src, lengths)
 
@@ -122,9 +122,12 @@ class TransformerEncoder(EncoderBase):
         mask = ~sequence_mask(lengths).unsqueeze(1)
         # Run the forward pass of every layer of the tranformer.
         for layer in self.transformer:
-            out = layer(out, mask)
+            out, attn = layer(out, mask)
+            self.scores = layer.self_attn.scores
         out = self.layer_norm(out)
-
+        if with_attn:
+            return out.transpose(0, 1).contiguous(), \
+                {'std': attn.transpose(0, 1).contiguous()}
         return emb, out.transpose(0, 1).contiguous(), lengths
 
     def update_dropout(self, dropout):

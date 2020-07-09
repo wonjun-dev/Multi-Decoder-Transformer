@@ -69,7 +69,7 @@ class VecSeqField(Field):
 
     def __init__(self, preprocessing=None, postprocessing=None,
                  include_lengths=False, batch_first=False, pad_index=0,
-                 is_target=False):
+                 is_target=False, for_adj=False):
         super(VecSeqField, self).__init__(
             sequential=True, use_vocab=False, init_token=None,
             eos_token=None, fix_length=False, dtype=torch.float,
@@ -79,6 +79,24 @@ class VecSeqField(Field):
             pad_first=False, truncate_first=False, stop_words=None,
             is_target=is_target
         )
+        self.for_adj = for_adj
+
+    def process(self, batch, device=None):
+        """ Process a list of examples to create a torch.Tensor.
+
+        Pad, numericalize, and postprocess a batch and create a tensor.
+
+        Args:
+            batch (list(object)): A list of object from a batch of examples.
+        Returns:
+            torch.autograd.Variable: Processed object given the input
+            and custom postprocessing Pipeline.
+        """
+        if isinstance(batch[0], list):
+            batch = sum(batch, [])
+        padded = self.pad(batch)
+        tensor = self.numericalize(padded, device=device)
+        return tensor
 
     def pad(self, minibatch):
         """Pad a batch of examples to the length of the longest example.
@@ -100,11 +118,17 @@ class VecSeqField(Field):
         lengths = [x.size(0) for x in minibatch]
         max_len = max(lengths)
         nfeats = minibatch[0].size(1)
-        feat_dim = minibatch[0].size(2)
-        feats = torch.full((len(minibatch), max_len, nfeats, feat_dim),
+        feat_dim = minibatch[0].size(2) if not self.for_adj else None
+        if self.for_adj:
+            feats = torch.full((len(minibatch), max_len, max_len),
                            self.pad_token)
-        for i, (feat, len_) in enumerate(zip(minibatch, lengths)):
-            feats[i, 0:len_, :, :] = feat
+            for i, (feat, len_) in enumerate(zip(minibatch, lengths)):
+                feats[i, :len_, :len_] = feat
+        else:
+            feats = torch.full((len(minibatch), max_len, nfeats, feat_dim),
+                           self.pad_token)
+            for i, (feat, len_) in enumerate(zip(minibatch, lengths)):
+                feats[i, 0:len_, :, :] = feat
         if self.include_lengths:
             return (feats, lengths)
         return feats
@@ -135,7 +159,11 @@ class VecSeqField(Field):
             arr = self.postprocessing(arr, None)
 
         if self.sequential and not self.batch_first:
-            arr = arr.permute(1, 0, 2, 3)
+            arr = arr.transpose(0, 1)
+            #if self.for_adj:
+            #    arr = arr.permute(1, 0, 2)
+            #else:
+            #    arr = arr.permute(1, 0, 2, 3)
         if self.sequential:
             arr = arr.contiguous()
 
@@ -144,6 +172,7 @@ class VecSeqField(Field):
         return arr
 
 
-def vec_fields(**kwargs):
-    vec = VecSeqField(pad_index=0, include_lengths=True)
+def vec_fields(pad_index=0, include_lengths=True, for_adj=False, **kwargs):
+    vec = VecSeqField(pad_index=pad_index, include_lengths=include_lengths,
+            for_adj=for_adj)
     return vec

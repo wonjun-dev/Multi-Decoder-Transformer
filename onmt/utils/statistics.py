@@ -4,7 +4,7 @@ import time
 import math
 import sys
 import numpy as np
-
+from sklearn.metrics import precision_recall_fscore_support, roc_auc_score
 from onmt.utils.logging import logger
 
 
@@ -18,11 +18,14 @@ class Statistics(object):
     * elapsed time
     """
 
-    def __init__(self, loss=0, n_words=0, n_correct=0, n_latent=1):
+    def __init__(self, loss=0, n_words=0, n_correct=0, score=[],
+            target=[], n_latent=1):
         self.loss = loss
         self.n_words = n_words
         self.n_correct = n_correct
         self.n_src_words = 0
+        self.score = score
+        self.target = target
         self.start_time = time.time()
 
         self.latent_counts = np.zeros([n_latent])
@@ -81,18 +84,28 @@ class Statistics(object):
                 or not
 
         """
-        self.loss += stat.loss
-        self.n_words += stat.n_words
-        self.n_correct += stat.n_correct
+        self.loss = self.loss + stat.loss
+        self.n_words =  self.n_words + stat.n_words
+        self.n_correct = self.n_correct + stat.n_correct
+        self.score = self.score + stat.score
+        self.target = self.target + stat.target
 
         if update_n_src_words:
-            self.n_src_words += stat.n_src_words
+            self.n_src_words = self.n_src_words + stat.n_src_words
 
-        self.latent_counts += stat.latent_counts
+        self.latent_counts = self.latent_counts + stat.latent_counts
 
     def accuracy(self):
         """ compute accuracy """
         return 100 * (self.n_correct / self.n_words)
+
+    def auc(self):
+        if len(self.score) > 0 and len(self.target):
+            score = np.concatenate(self.score, axis=0)
+            target = np.concatenate(self.target, axis=0)
+            return roc_auc_score(target, score)
+        else:
+            return 0
 
     def xent(self):
         """ compute cross entropy """
@@ -100,7 +113,8 @@ class Statistics(object):
 
     def ppl(self):
         """ compute perplexity """
-        return math.exp(min(self.loss / self.n_words, 100))
+        return np.exp(np.min((self.loss / self.n_words, 100 *
+            np.ones_like(self.n_words)), axis=0))
 
     def elapsed_time(self):
         """ compute elapsed time """
@@ -128,12 +142,12 @@ class Statistics(object):
         if num_steps > 0:
             step_fmt = "%s/%5d" % (step_fmt, num_steps)
         logger.info(
-            ("Step %s; acc: %6.2f; ppl: %5.2f; xent: %4.2f; " +
-             "lr: %7.5f; %s %3.0f/%3.0f tok/s; %6.0f sec")
-            % (step_fmt,
+                ("Step {}; acc: {}; ppl: {}; xent: {} auc: {}; " +
+                "lr: {:.2f}; {} {:.2f}/{} tok/s; {:.2f} sec").format(step_fmt,
                self.accuracy(),
                self.ppl(),
                self.xent(),
+               self.auc(),
                learning_rate,
                self.latent_output(),
                self.n_src_words / (t + 1e-5),
@@ -147,5 +161,6 @@ class Statistics(object):
         writer.add_scalar(prefix + "/xent", self.xent(), step)
         writer.add_scalar(prefix + "/ppl", self.ppl(), step)
         writer.add_scalar(prefix + "/accuracy", self.accuracy(), step)
+        writer.add_scalar(prefix + "/auc", self.auc(), step)
         writer.add_scalar(prefix + "/tgtper", self.n_words / t, step)
         writer.add_scalar(prefix + "/lr", learning_rate, step)

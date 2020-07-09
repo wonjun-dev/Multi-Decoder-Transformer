@@ -193,6 +193,7 @@ class MultiHeadedAttention(nn.Module):
         else:
             scores = query_key
         scores = scores.float()
+        self.scores = scores
 
         if mask is not None:
             mask = mask.unsqueeze(1)  # [B, 1, 1, T_values]

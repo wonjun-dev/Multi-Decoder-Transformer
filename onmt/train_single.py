@@ -71,10 +71,19 @@ def main(opt, device_id, batch_queue=None, semaphore=None):
         checkpoint = torch.load(opt.train_from,
                                 map_location=lambda storage, loc: storage)
         model_opt = ArgumentParser.ckpt_model_opts(checkpoint["opt"])
+        model_opt.pretrain_neighbor = opt.pretrain_neighbor
+        model_opt.pretrain_attr = opt.pretrain_attr
+        model_opt.contrastive = opt.contrastive
+        model_opt.n_smiles_aug = opt.n_smiles_aug
+        model_opt.binary_clf = opt.binary_clf
+        model_opt.dropout = opt.dropout
+        model_opt.early_stopping = opt.early_stopping
+        print(model_opt.learning_rate)
+        input()
         ArgumentParser.update_model_opts(model_opt)
         ArgumentParser.validate_model_opts(model_opt)
         logger.info('Loading vocab from checkpoint at %s.' % opt.train_from)
-        vocab = checkpoint['vocab']
+        vocab = torch.load(opt.data + '.vocab.pt') #checkpoint['vocab']
         if 'tgt1' in vocab:
             vocab['tgt'] = vocab.pop('tgt1')
             vocab.pop('tgt2')
@@ -115,7 +124,9 @@ def main(opt, device_id, batch_queue=None, semaphore=None):
     write_opt('%s/opts.txt' % (output_dir), opt)
 
     # Build optimizer.
-    optim = Optimizer.from_opt(model, opt, checkpoint=checkpoint)
+    print(opt.learning_rate)
+    input()
+    optim = Optimizer.from_opt(model, opt)#, checkpoint=checkpoint)
 
     # Build model saver
     model_saver = build_model_saver(model_opt, opt, model, fields, optim)
@@ -139,6 +150,8 @@ def main(opt, device_id, batch_queue=None, semaphore=None):
                 shard_base = "train_" + opt.data_ids[0]
             else:
                 shard_base = "train"
+            if opt.pretrain_masked_lm:# or opt.contrastive:
+                fields['tgt'] = fields['src']
             train_iter = build_dataset_iter(shard_base, fields, opt)
 
     else:
@@ -163,17 +176,17 @@ def main(opt, device_id, batch_queue=None, semaphore=None):
     if opt.single_pass and train_steps > 0:
         logger.warning("Option single_pass is enabled, ignoring train_steps.")
         train_steps = 0
-
     total_stats, stats_manager = trainer.train(
-        train_iter,
-        train_steps,
-        save_checkpoint_steps=opt.save_checkpoint_steps,
-        valid_iter=valid_iter,
-        valid_steps=opt.valid_steps)
+            train_iter,
+            train_steps,
+            save_checkpoint_steps=opt.save_checkpoint_steps,
+            valid_iter=valid_iter,
+            valid_steps=opt.valid_steps)
 
     stats_manager.write_stats(output_dir=output_dir)
 
-    best_model_step, best_model_stats = stats_manager.get_best_model()
+    best_model_step, best_model_stats = stats_manager.get_best_model(stat_name='acc' if not opt.binary_clf else
+    'auc')
     best_model_path = opt.save_model + '_step_%d.pt' % best_model_step
 
     with open('%s/summary.txt' % output_dir, 'w+') as summary_file:

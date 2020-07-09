@@ -1,7 +1,8 @@
 import rdkit.Chem as Chem
+import numpy as np
 import re
 from collections import defaultdict
-
+import copy
 import pdb
 
 
@@ -15,6 +16,66 @@ def smi_tokenizer(smi):
     tokens = [token for token in regex.findall(smi)]
     assert smi == ''.join(tokens)
     return ' '.join(tokens)
+
+
+def find_atomic_token(tokenized):
+    """
+    Tokenize a SMILES molecule or reaction
+    """
+    import re
+    pattern = "(\[[^\]]+]|Br?|Cl?|N|O|S|P|F|I|b|c|n|o|s|p)" #|\(|\)|\.|=|#|-|\+|\\\\|\/|:|~|@|\?|>|\*|\$|\%[0-9]{2}|[0-9])"
+    regex = re.compile(pattern)
+    is_atomic = [regex.match(token) is not None for token in tokenized]
+    return np.array(is_atomic)
+
+#max_val = 0
+#min_val = 100
+def adj2khop(adj, K):
+    n = adj.shape[0]
+    A = adj
+    C = copy.deepcopy(A)
+    for k in range(2, K+1):
+        B = np.zeros_like(A)
+        tmp = np.matmul(A, C)
+        B[(tmp > 0) & (C == 0)] = k
+        B[np.arange(n), np.arange(n)] = 0
+        C = C + B
+    return C
+
+
+def get_mol_and_adj(smiles, K=4):
+    global max_val
+    global min_val
+    mol = Chem.MolFromSmiles(smiles)
+    adj = Chem.rdmolops.GetAdjacencyMatrix(mol, useBO=True)
+    adj[adj==1.5] = 4
+    khop = adj2khop((adj>0).astype(int), K)
+    atoms = mol.GetAtoms()
+    features = dict({})
+    features['valence'] = np.array([atom.GetExplicitValence() for atom in
+        atoms]) -1
+    features['degree'] = np.array([atom.GetDegree() for atom in atoms])
+    features['atomic'] = np.array([atom.GetAtomicNum() for atom in atoms]) -1
+    features['is_aromatic'] = np.array([int(atom.GetIsAromatic()) for atom in atoms])
+    features['num_h'] = np.array([atom.GetTotalNumHs() for atom in atoms])
+    features['formal_charge'] = np.array([atom.GetFormalCharge() for atom in
+        atoms]) + 5
+    #print(features['valence'])
+    #max_val = max(max_val, features['valence'].max())
+    #min_val = min(min_val, features['valence'].min())
+    #print(max_val, min_val)
+    return mol, adj, khop, features
+
+def enum_smiles_from_mol(mol):
+    #mol = Chem.MolFromSmiles(canon_smiles)
+    ans = list(range(mol.GetNumAtoms()))
+    np.random.shuffle(ans)
+    new_mol = Chem.RenumberAtoms(mol, ans)
+    new_smiles = Chem.MolToSmiles(new_mol, canonical=False)
+    smiles_order = np.array(new_mol.GetPropsAsDict(True, True)['_smilesAtomOutputOrder'])
+    ans = np.array(ans)
+    new2canon = ans[smiles_order]
+    return new_smiles, new2canon
 
 
 def canonicalize_smiles(smiles):

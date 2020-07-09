@@ -7,6 +7,12 @@ import torch
 from torchtext.data import Dataset as TorchtextDataset
 from torchtext.data import Example
 from torchtext.vocab import Vocab
+import random
+import numpy as np
+import copy
+from utils.data_utils import enum_smiles_from_mol, \
+        smi_tokenizer, find_atomic_token, get_mol_and_adj
+from dgl.data import chem
 
 
 def _join_dicts(*args):
@@ -59,6 +65,17 @@ def _dynamic_dict(example, src_field, tgt_field):
         example["alignment"] = mask
     return src_ex_vocab, example
 
+atom_featurizer = chem.BaseAtomFeaturizer({
+            'atom': chem.atom_type_one_hot,
+            'degree': chem.atom_total_degree,
+            'valence': chem.atom_implicit_valence,
+            'formal_charge': chem.atom_formal_charge,
+            #'chiral': chem.atom_chiral_tag_one_hot,
+            'num_h': chem.atom_total_num_H,
+            #'hybridization': atom_hybridization_one_hot,
+            'aromatic': chem.atom_is_aromatic
+        })
+
 
 class Dataset(TorchtextDataset):
     """Contain data and process it.
@@ -108,12 +125,27 @@ class Dataset(TorchtextDataset):
     """
 
     def __init__(self, fields, readers, data, dirs, sort_key,
-                 filter_pred=None):
+                 filter_pred=None, random_mask=False, contrastive=False,
+                 n_smiles_aug=1, get_adj=False, get_attr=False,
+                 get_new2canon=False):
         self.sort_key = sort_key
+        self.random_mask = random_mask
+        self.contrastive = contrastive
+        self.n_smiles_aug = n_smiles_aug
+        self.get_adj = get_adj
+        self.get_attr = get_attr
+        self.get_new2canon = get_new2canon
+
         can_copy = 'src_map' in fields and 'alignment' in fields
 
-        read_iters = [r.read(dat[1], dat[0], dir_) for r, dat, dir_
+        def reader(dat):
+            for d in dat[1]:
+                yield {dat[0]: d}
+
+        read_iters = [r.read(dat[1], dat[0], dir_) if r is not None else
+                 reader(dat) for r, dat, dir_
                       in zip(readers, data, dirs)]
+
 
         # self.src_vocabs is used in collapse_copy_scores and Translator.py
         self.src_vocabs = []
@@ -133,10 +165,9 @@ class Dataset(TorchtextDataset):
 
         # fields needs to have only keys that examples have as attrs
         fields = []
-        for _, nf_list in ex_fields.items():
+        for k, nf_list in ex_fields.items():
             assert len(nf_list) == 1
             fields.append(nf_list[0])
-
         super(Dataset, self).__init__(examples, fields, filter_pred)
 
     def __getattr__(self, attr):
@@ -147,6 +178,129 @@ class Dataset(TorchtextDataset):
             return (getattr(x, attr) for x in self.examples)
         else:
             raise AttributeError
+
+    def __getitem__(self, idx):
+        ex = copy.deepcopy(self.examples[idx])
+        if not getattr(self, 'random_mask', False) and not getattr(self,
+                'contrastive', False) and not getattr(self, 'get_adj', False) and \
+                not getattr(self, 'get_attr', False) and not getattr(self,
+                        'get_new2canon', False):
+            #if isinstance(ex.tgt, (float, np.int64)):
+            ex.src = [['<MASK>'] + ex.src[0]]
+            return ex
+
+        n_smiles_aug = getattr(self, 'n_smiles_aug', 1)
+        src = copy.deepcopy(ex.src[0])
+        try:
+            tgt = copy.deepcopy(ex.tgt[0])
+        except:
+            pass
+        src_smiles = ''.join(src)
+        src_mol, src_adj, src_khop, src_atom_features = \
+                            get_mol_and_adj(src_smiles, K=4)
+        atom_features = atom_featurizer(src_mol)
+        n_src_atom = len(src_adj)
+        src_adj[np.arange(n_src_atom), np.arange(n_src_atom)] = -1
+        src_khop[np.arange(n_src_atom), np.arange(n_src_atom)] = -1
+        src_is_atomic = find_atomic_token(src)
+        src_atomic_ind = src_is_atomic.nonzero()[0]
+        adjs = []
+        khops = []
+        new2canons = []
+        #if n_smiles_aug > 1:
+        new_srcs = []
+        featuress = {key: [] for key in src_atom_features}
+        for _ in range(n_smiles_aug):
+            new_smiles, new2canon = enum_smiles_from_mol(src_mol)
+            new_srcs.append(smi_tokenizer(new_smiles).strip().split())
+            n_token = len(new_srcs[-1])
+            is_atomic = find_atomic_token(new_srcs[-1])
+            atomic_ind = is_atomic.nonzero()[0]
+            adj = torch.full((n_token, n_token), -1)
+            khop = torch.full((n_token, n_token), -1)
+            adj[atomic_ind.reshape(-1, 1), atomic_ind] = \
+                torch.tensor(src_adj[new2canon.reshape(-1, 1),
+                    new2canon]).float()
+            khop[atomic_ind.reshape(-1, 1), atomic_ind] = \
+                torch.tensor(src_khop[new2canon.reshape(-1, 1),
+                    new2canon]).float()
+            adjs.append(adj)
+            khops.append(khop)
+            for key, val in src_atom_features.items():
+                featuress[key].append(torch.full((n_token,), -1))
+                featuress[key][-1][is_atomic] = torch.tensor(val[new2canon]).float()
+                featuress[key][-1] = featuress[key][-1].view(-1, 1, 1)
+            tmp = torch.full((n_token,), -1)
+            tmp[is_atomic] = torch.tensor(src_atomic_ind[new2canon]).float()
+            new2canons.append(tmp.view(-1, 1, 1))
+            featuress['khop'] = khops
+            featuress['adj'] = adjs
+        ex.src = new_srcs
+        try:
+            tgt_smiles = ''.join(tgt)
+            tgt_mol, _, _, _ = \
+                    get_mol_and_adj(tgt_smiles, K=1)
+            ex.tgt = [smi_tokenizer(enum_smiles_from_mol(tgt_mol)[0]).strip().split()
+                    for _ in range(n_smiles_aug)]
+            #ex.tgt = [tgt for _ in range(n_smiles_aug)]
+        except:
+            pass
+        for key, val in featuress.items():
+            setattr(ex, key, val)
+            #print(key, getattr(ex, key).unsqueeze())
+        #input()
+        #else:
+        #    new_srcs = [src]
+        #    n_token = len(new_srcs[-1])
+        #    is_atomic = find_atomic_token(new_srcs[-1])
+        #    atomic_ind = is_atomic.nonzero()[0]
+        #    adj = torch.full((n_token, n_token), -1)
+        #    adj[atomic_ind.reshape(-1, 1), atomic_ind] = src_adj
+        #    adjs.append(adj)
+        #    tmp = torch.full((n_token,), -1)
+        #    tmp[is_atomic] = torch.tensor(src_atomic_ind)
+        #    new2canons.append(tmp.view(-1, 1, 1))
+        #ex.adj = adjs
+        ex.new2canon = new2canons
+
+        if not getattr(self, 'random_mask', False) and not getattr(self, 'contrastive', False):
+            return ex
+
+        if getattr(self, 'contrastive', False):
+            new_srcs = [['<MASK>'] + src_ for src_ in new_srcs]
+            ex.src = new_srcs
+            return ex
+        # masked lm
+        src_field = self.fields['tgt']
+        pad_token = src_field.base_field.pad_token
+
+        srcs = []
+        tgts = []
+        for src in ex.src:
+            tgt = src
+            probs = np.random.rand(len(src))
+            edit_ind = (probs < 0.15).nonzero()[0]
+            remainder_ind = (probs >= 0.15).nonzero()[0]
+            for ind in remainder_ind:
+                tgt[ind] = pad_token
+            #print("tgt", tgt)
+            probs = probs[edit_ind] / 0.15
+            for ind in (probs < 0.8).nonzero()[0]:
+                src[edit_ind[ind]] = '<MASK>'
+            vocab_list = list(src_field.fields[0][1].vocab.stoi.keys())
+            vocab_list.remove('<s>')#src_field.base_field.init_token)
+            vocab_list.remove('</s>')#src_field.base_field.eos_token)
+            vocab_list.remove('<blank>')#src_field.base_field.pad_token)
+            vocab_list.remove('<unk>')
+            vocab_list.remove('<MASK>')
+            for ind, val in zip((probs>0.9).nonzero()[0],
+                    np.random.choice(vocab_list, len(probs[probs>0.9]))):
+                src[edit_ind[ind]] = val
+            srcs.append(src)
+            tgts.append(tgt)
+        ex.src = srcs
+        ex.tgt = tgts
+        return ex
 
     def save(self, path, remove_fields=True):
         if remove_fields:

@@ -79,12 +79,17 @@ def build_save_dataset(corpus_type, fields, src_reader, tgt_reader, opt):
                     opt.tgt_words_min_frequency)
             else:
                 tgt_vocab = None
+            if existing_fields is not None:
+                fields['src'] = existing_fields['src']
+                fields['tgt'] = existing_fields['tgt']
+                fields['indices'] = existing_fields['indices']
 
         for i, (src_shard, tgt_shard) in enumerate(shard_pairs):
             assert len(src_shard) == len(tgt_shard)
             logger.info("Building shard %d." % i)
             dataset = inputters.Dataset(
                 fields,
+                #existing_fields if corpus_type == 'train' and existing_fields else fields,
                 readers=([src_reader, tgt_reader]
                          if tgt_reader else [src_reader]),
                 data=([("src", src_shard), ("tgt", tgt_shard)]
@@ -92,7 +97,13 @@ def build_save_dataset(corpus_type, fields, src_reader, tgt_reader, opt):
                 dirs=([opt.src_dir, None]
                       if tgt_reader else [opt.src_dir]),
                 sort_key=inputters.str2sortkey[opt.data_type],
-                filter_pred=filter_pred
+                filter_pred=filter_pred,
+                random_mask=opt.random_mask,
+                contrastive=opt.contrastive,
+                n_smiles_aug=opt.n_smiles_aug,
+                get_adj=opt.get_adj,
+                get_attr=opt.get_attr,
+                get_new2canon=opt.get_new2canon
             )
             if corpus_type == "train" and existing_fields is None:
                 for ex in dataset.examples:
@@ -140,9 +151,13 @@ def build_save_dataset(corpus_type, fields, src_reader, tgt_reader, opt):
                 opt.share_vocab, opt.vocab_size_multiple,
                 opt.src_vocab_size, opt.src_words_min_frequency,
                 opt.tgt_vocab_size, opt.tgt_words_min_frequency)
-        else:
-            fields = existing_fields
+        #else:
+        #    fields = existing_fields
         torch.save(fields, vocab_path)
+        print(fields['src'].base_field.vocab.stoi)
+
+    return fields
+
 
 
 def build_save_vocab(train_dataset, fields, opt):
@@ -192,15 +207,19 @@ def main(opt):
         tgt_nfeats,
         dynamic_dict=opt.dynamic_dict,
         src_truncate=opt.src_seq_length_trunc,
-        tgt_truncate=opt.tgt_seq_length_trunc)
+        tgt_truncate=opt.tgt_seq_length_trunc,
+        get_adj=opt.get_adj,
+        get_attr=opt.get_attr,
+        get_new2canon=opt.get_new2canon
+        )
 
     src_reader = inputters.str2reader[opt.data_type].from_opt(opt)
     tgt_reader = inputters.str2reader["text"].from_opt(opt)
 
     logger.info("Building & saving training data...")
-    build_save_dataset(
+    fields = build_save_dataset(
         'train', fields, src_reader, tgt_reader, opt)
-
+    opt.contrastive = False
     if opt.valid_src and opt.valid_tgt:
         logger.info("Building & saving validation data...")
         build_save_dataset('valid', fields, src_reader, tgt_reader, opt)

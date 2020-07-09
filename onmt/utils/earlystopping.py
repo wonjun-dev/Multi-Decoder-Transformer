@@ -1,6 +1,7 @@
 
 from enum import Enum
 from onmt.utils.logging import logger
+import numpy as np
 
 
 class PatienceEnum(Enum):
@@ -36,13 +37,27 @@ class PPLScorer(Scorer):
         super(PPLScorer, self).__init__(float("inf"), "ppl")
 
     def is_improving(self, stats):
-        return stats.ppl() < self.best_score
+        return np.mean(stats.ppl()) < self.best_score
 
     def is_decreasing(self, stats):
-        return stats.ppl() > self.best_score
+        return np.mean(stats.ppl()) > self.best_score
 
     def _caller(self, stats):
-        return stats.ppl()
+        return np.mean(stats.ppl())
+
+class XentScorer(Scorer):
+
+    def __init__(self):
+        super(XentScorer, self).__init__(float("inf"), "xent")
+
+    def is_improving(self, stats):
+        return np.mean(stats.xent()) < self.best_score
+
+    def is_decreasing(self, stats):
+        return np.mean(stats.xent()) > self.best_score
+
+    def _caller(self, stats):
+        return np.mean(stats.xent())
 
 
 class AccuracyScorer(Scorer):
@@ -51,21 +66,37 @@ class AccuracyScorer(Scorer):
         super(AccuracyScorer, self).__init__(float("-inf"), "acc")
 
     def is_improving(self, stats):
-        return stats.accuracy() > self.best_score
+        return np.mean(stats.accuracy()) > self.best_score
 
     def is_decreasing(self, stats):
-        return stats.accuracy() < self.best_score
+        return np.mean(stats.accuracy()) < self.best_score
 
     def _caller(self, stats):
-        return stats.accuracy()
+        return np.mean(stats.accuracy())
+
+class AUCScorer(Scorer):
+
+    def __init__(self):
+        super(AUCScorer, self).__init__(float("-inf"), "auc")
+
+    def is_improving(self, stats):
+        return stats.auc() > self.best_score
+
+    def is_decreasing(self, stats):
+        return stats.auc() < self.best_score
+
+    def _caller(self, stats):
+        return stats.auc()
 
 
-DEFAULT_SCORERS = [PPLScorer(), AccuracyScorer()]
+DEFAULT_SCORERS = [PPLScorer(), AccuracyScorer(), AUCScorer(), XentScorer()]
 
 
 SCORER_BUILDER = {
     "ppl": PPLScorer,
-    "accuracy": AccuracyScorer
+    "accuracy": AccuracyScorer,
+    "auc": AUCScorer,
+    "xent": XentScorer
 }
 
 

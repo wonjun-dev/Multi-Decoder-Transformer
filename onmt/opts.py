@@ -162,6 +162,7 @@ def model_opts(parser):
               help='Turn on the FFN layer in the AAN decoder')
 
     # Generator and loss options.
+    group.add('--binary_clf', '-binary_clf', action='store_true')
     group.add('--copy_attn', '-copy_attn', action="store_true",
               help='Train copy attention layer.')
     group.add('--copy_attn_type', '-copy_attn_type',
@@ -174,6 +175,7 @@ def model_opts(parser):
               help="Which function to use for generating "
                    "probabilities over the target vocabulary (choices: "
                    "softmax, sparsemax)")
+    group.add('--n_gen_layer', '-n_gen_layer', default=1, type=int)
     group.add('--copy_attn_force', '-copy_attn_force', action="store_true",
               help='When available, train to copy.')
     group.add('--reuse_copy_attn', '-reuse_copy_attn', action="store_true",
@@ -222,7 +224,7 @@ def preprocess_opts(parser):
     group.add('--max_shard_size', '-max_shard_size', type=int, default=0,
               help="""Deprecated use shard_size instead""")
 
-    group.add('--shard_size', '-shard_size', type=int, default=1000000,
+    group.add('--shard_size', '-shard_size', type=int, default=2000000,
               help="Divide src_corpus and tgt_corpus into "
                    "smaller multiple src_copus and tgt corpus files, then "
                    "build shards, each shard will have "
@@ -233,6 +235,17 @@ def preprocess_opts(parser):
 
     group.add('--overwrite', '-overwrite', action="store_true",
               help="Overwrite existing shards if any.")
+    group.add('--random_mask', '-random_mask', action="store_true",
+            help="random mask sampling (BERT)")
+    group.add('--contrastive', '-contrastive', action="store_true",
+            help="contrastive learning")
+    group.add('--n_smiles_aug', '-n_smiles_aug', type=int, default=1)
+    group.add('--get_adj', '-get_adj', action="store_true",
+            help="adj")
+    group.add('--get_attr', '-get_attr', action="store_true",
+            help="attr")
+    group.add('--get_new2canon', '-get_new2canon', action="store_true",
+            help="new2canon")
 
     # Dictionary options, for text corpus
 
@@ -345,6 +358,15 @@ def train_opts(parser):
     group.add('--keep_checkpoint', '-keep_checkpoint', type=int, default=-1,
               help="Keep X checkpoints (negative: keep all)")
 
+    group.add('--pretrain_masked_lm', '-pretrain_masked_lm', action='store_true',
+              help="pretraining method of BERT.")
+    group.add('--contrastive', '-contrastive', action="store_true",
+            help="contrastive learning")
+    group.add('--pretrain_neighbor', '-pretrain_neighbor', action="store_true",
+            help="neighbor learning")
+    group.add('--pretrain_attr', '-pretrain_attr', action="store_true",
+            help="neighbor learning")
+    group.add('--n_smiles_aug', '-n_smiles_aug', type=int, default=1)
     # GPU
     group.add('--gpuid', '-gpuid', default=[], nargs='*', type=int,
               help="Deprecated see world_size and gpu_ranks.")
@@ -527,6 +549,8 @@ def train_opts(parser):
               choices=['noam', 'noamwd', 'rsqrt', 'none'],
               help="Use a custom decay rate.")
     group.add('--warmup_steps', '-warmup_steps', type=int, default=4000,
+              help="Number of warmup steps for custom decay.")
+    group.add('--update_enc_from', '-update_enc_from', type=int, default=0,
               help="Number of warmup steps for custom decay.")
 
     group.add('--reset_cycle_steps', '-reset_cycle_steps', type=int, default=0,

@@ -1,7 +1,7 @@
 #!/bin/bash
 
-dataset=USPTO-50k_no_rxn_aug_2
-latent=(0 2 5)
+dataset=USPTO-50k_no_rxn #_aug_2
+latent=(0) # 2 5)
 dropout=(0.25)
 model_name=mt
 device=$1
@@ -20,9 +20,14 @@ for l in ${latent[@]}; do
                 -batch_size 32 -batch_type sents -normalization sents -max_grad_norm 0  -accum_count 4 \
                 -optim adam -adam_beta1 0.9 -adam_beta2 0.998 -decay_method noam -warmup_steps 8000  \
                 -learning_rate 2 -label_smoothing 0.0 \
-                -layers 4 -rnn_size 256 -word_vec_size 256 -encoder_type transformer -decoder_type transformer \
+                -layers 6 -rnn_size 256 -word_vec_size 256 -encoder_type transformer -decoder_type transformer \
+                -pool_factor 4 \
+                -early_stopping_criteria accuracy ppl \
                 -dropout "${p}" -position_encoding -share_embeddings \
-                -heads 8 -transformer_ff 2048 -tensorboard -tensorboard_log_dir runs/${dataset}_${model_name} -world_size=1 -seed "${seed}" -early_stopping 15 -n_latent "${l}"
+                -train_from experiments/chembl_lm_pretrain_neighbor_attr_contrastive_toksim-6-2048-256-0.1_0_0.1_2022/models/model_step_187000.pt \
+                -world_size=1 -seed "${seed}" -early_stopping 15 -n_latent "${l}" \
+                -n_smiles_aug=1 \
+                -heads 8 -transformer_ff 2048 #-tensorboard -tensorboard_log_dir runs/${dataset}_${model_name}
 
         # Translate
         summ_path=experiments/${dataset}_${model_name}_${l}_${p}_${seed}/summary.txt

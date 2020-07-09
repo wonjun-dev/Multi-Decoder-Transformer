@@ -10,8 +10,33 @@ import torch.nn.functional as F
 import onmt
 from onmt.modules.sparse_losses import SparsemaxLoss
 from onmt.modules.sparse_activations import LogSparsemax
-
+import numpy as np
 import pdb
+
+
+class LDAMLoss(nn.Module):
+    def __init__(self, cls_num_list=[39684, 1443], max_m=0.5, weight=None, s=30):
+        super(LDAMLoss, self).__init__()
+        m_list = 1.0 / np.sqrt(np.sqrt(cls_num_list))
+        m_list = m_list * (max_m / np.max(m_list))
+        m_list = torch.cuda.FloatTensor(m_list)
+        self.m_list = m_list
+        assert s > 0
+        self.s = s
+        self.weight = weight
+
+    def forward(self, x, target):
+        index = torch.zeros_like(x, dtype=torch.uint8)
+        index.scatter_(1, target.data.view(-1, 1), 1)
+
+        index_float = index.type(torch.cuda.FloatTensor)
+        batch_m = torch.matmul(self.m_list[None, :], index_float.transpose(0,1))
+        batch_m = batch_m.view((-1, 1))
+        x_m = x - batch_m
+
+        output = torch.where(index, x_m, x)
+        return F.cross_entropy(self.s*output, target, weight=self.weight)
+
 
 
 def build_loss_compute(model, tgt_field, opt, train=True, reduce=True):
@@ -28,41 +53,51 @@ def build_loss_compute(model, tgt_field, opt, train=True, reduce=True):
     padding_idx = tgt_field.vocab.stoi[tgt_field.pad_token]
     unk_idx = tgt_field.vocab.stoi[tgt_field.unk_token]
 
-    if opt.lambda_coverage != 0:
-        assert opt.coverage_attn, "--coverage_attn needs to be set in " \
-            "order to use --lambda_coverage != 0"
-
-    if opt.copy_attn:
-        criterion = onmt.modules.CopyGeneratorLoss(
-            len(tgt_field.vocab), opt.copy_attn_force,
-            unk_index=unk_idx, ignore_index=padding_idx
-        )
-    elif opt.label_smoothing > 0 and train:
-        criterion = LabelSmoothingLoss(
-            opt.label_smoothing, len(tgt_field.vocab), ignore_index=padding_idx
-        )
-    elif isinstance(model.generator[-1], LogSparsemax):
-        criterion = SparsemaxLoss(ignore_index=padding_idx, reduction='sum')
+    if opt.pretrain_neighbor or opt.pretrain_attr or opt.contrastive:
+        criterion = [nn.BCEWithLogitsLoss(reduction='none'),
+                nn.NLLLoss(ignore_index=-1, reduction='none')]
+        loss_gen = model.generator
+        compute = NeighborLossCompute(criterion, loss_gen, opt=opt)
+    elif opt.binary_clf:
+        #criterion = LDAMLoss(max_m=0.5, weight=None, s=30) #nn.BCEWithLogitsLoss(reduction='none')
+        criterion = nn.BCEWithLogitsLoss(reduction='none')
+        loss_gen = model.generator
+        compute = BinaryClfLossCompute(criterion, loss_gen, opt=opt)
     else:
-        if reduce:
-            criterion = nn.NLLLoss(ignore_index=padding_idx, reduction='sum')
+        if opt.lambda_coverage != 0:
+            assert opt.coverage_attn, "--coverage_attn needs to be set in " \
+                "order to use --lambda_coverage != 0"
+        if opt.copy_attn:
+            criterion = onmt.modules.CopyGeneratorLoss(
+                len(tgt_field.vocab), opt.copy_attn_force,
+                unk_index=unk_idx, ignore_index=padding_idx
+            )
+        elif opt.label_smoothing > 0 and train:
+            criterion = LabelSmoothingLoss(
+                opt.label_smoothing, len(tgt_field.vocab), ignore_index=padding_idx
+            )
+        elif isinstance(model.generator[-1], LogSparsemax):
+            criterion = SparsemaxLoss(ignore_index=padding_idx, reduction='sum')
         else:
-            criterion = nn.NLLLoss(ignore_index=padding_idx, reduction='none')
+            if reduce:
+                criterion = nn.NLLLoss(ignore_index=padding_idx, reduction='sum')
+            else:
+                criterion = nn.NLLLoss(ignore_index=padding_idx, reduction='none')
 
-    # if the loss function operates on vectors of raw logits instead of
-    # probabilities, only the first part of the generator needs to be
-    # passed to the NMTLossCompute. At the moment, the only supported
-    # loss function of this kind is the sparsemax loss.
-    use_raw_logits = isinstance(criterion, SparsemaxLoss)
-    loss_gen = model.generator[0] if use_raw_logits else model.generator
-    if opt.copy_attn:
-        compute = onmt.modules.CopyGeneratorLossCompute(
-            criterion, loss_gen, tgt_field.vocab, opt.copy_loss_by_seqlength,
-            lambda_coverage=opt.lambda_coverage
-        )
-    else:
-        compute = NMTLossCompute(
-            criterion, loss_gen, lambda_coverage=opt.lambda_coverage)
+        # if the loss function operates on vectors of raw logits instead of
+        # probabilities, only the first part of the generator needs to be
+        # passed to the NMTLossCompute. At the moment, the only supported
+        # loss function of this kind is the sparsemax loss.
+        use_raw_logits = isinstance(criterion, SparsemaxLoss)
+        loss_gen = model.generator[0] if use_raw_logits else model.generator
+        if opt.copy_attn:
+            compute = onmt.modules.CopyGeneratorLossCompute(
+                criterion, loss_gen, tgt_field.vocab, opt.copy_loss_by_seqlength,
+                lambda_coverage=opt.lambda_coverage
+            )
+        else:
+            compute = NMTLossCompute(
+                criterion, loss_gen, lambda_coverage=opt.lambda_coverage, opt=opt)
     compute.to(device)
 
     return compute
@@ -161,12 +196,17 @@ class LossComputeBase(nn.Module):
             A tuple with the loss and a :obj:`onmt.utils.Statistics` instance.
         """
         if trunc_size is None:
-            trunc_size = batch.tgt.size(0) - trunc_start
+            tgt = batch.tgt
+            if isinstance(tgt, tuple):
+                tgt = tgt[0]
+            trunc_size = tgt.size(0) - trunc_start
         trunc_range = (trunc_start, trunc_start + trunc_size)
         shard_state = self._make_shard_state(batch, output, trunc_range, attns)
         if shard_size == 0:
+            #print("HERE: SHARD_SIZE == 0")
             loss, stats = self._compute_loss(batch, **shard_state, n_latent=n_latent)
             return loss / float(normalization), stats
+        #print("HERE: SHARD_SIZE != 0")
         batch_stats = onmt.utils.Statistics(n_latent=n_latent)
         for shard in shards(shard_state, shard_size):
             loss, stats = self._compute_loss(batch, **shard, n_latent=n_latent)
@@ -234,14 +274,19 @@ class NMTLossCompute(LossComputeBase):
     """
 
     def __init__(self, criterion, generator, normalization="sents",
-                 lambda_coverage=0.0):
+                 lambda_coverage=0.0, opt=None):
         super(NMTLossCompute, self).__init__(criterion, generator)
         self.lambda_coverage = lambda_coverage
+        self.opt = opt
 
     def _make_shard_state(self, batch, output, range_, attns=None):
+        tgt = batch.tgt
+        if isinstance(tgt, tuple):
+            tgt = tgt[0]
+        #print("range", range_)
         shard_state = {
             "output": output,
-            "target": batch.tgt[range_[0] + 1: range_[1], :, 0],
+            "target": tgt[range_[0] + (1 if not self.opt.pretrain_masked_lm else 0): range_[1], :, 0],
         }
         if self.lambda_coverage != 0.0:
             coverage = attns.get("coverage", None)
@@ -260,6 +305,7 @@ class NMTLossCompute(LossComputeBase):
 
     def _compute_loss(self, batch, output, target, std_attn=None,
                       coverage_attn=None, n_latent=1):
+
         bottled_output = self._bottle(output)
 
         scores = self.generator(bottled_output)
@@ -284,6 +330,278 @@ class NMTLossCompute(LossComputeBase):
         covloss = torch.min(std_attn, coverage_attn).sum(2).view(-1)
         covloss *= self.lambda_coverage
         return covloss
+
+
+class NeighborLossCompute(LossComputeBase):
+    """
+    Standard NMT Loss Computation.
+    """
+
+    def __init__(self, criterion, generator,# normalization="sents",
+                 opt=None):
+        super(NeighborLossCompute, self).__init__(criterion, generator)
+        self.opt = opt
+
+    def _make_shard_state(self, batch, output, range_, attns=None):
+        #tgt = batch.tgt
+        #if isinstance(tgt, tuple):
+        #    tgt = tgt[0]
+        #print("range", range_)
+        if isinstance(output, tuple):
+            output, mol_repr = output
+        else:
+            mol_repr = None
+        shard_state = {
+            "output": output,
+            "adj" : getattr(batch, 'adj', None),
+            "khop" : getattr(batch, 'khop', None),
+            "valence" : getattr(batch, 'valence', None),
+            "degree" : getattr(batch, 'degree', None),
+            "atomic" : getattr(batch, 'atomic', None),
+            "is_aromatic": getattr(batch, 'is_aromatic', None),
+            "num_h": getattr(batch, 'num_h', None),
+            "formal_charge": getattr(batch, 'formal_charge', None),
+            "new2canon": getattr(batch, 'new2canon', None),
+            "mol_repr": mol_repr
+            #"target": tgt[range_[0] + (1 if not self.opt.pretrain_masked_lm else 0): range_[1], :, 0],
+        }
+        return shard_state
+
+    def _compute_loss(self, batch, output, #adj=None, valence=None, atomic=None,
+            #is_aromatic=None, num_h=None, formal_charge=None, #, std_attn=None,
+                      coverage_attn=None, n_latent=1, **kwargs):
+
+        # output: seq_len x batch_size x model_dim
+        # adj: seq_len x batch_size x seq_len
+        # feats : seq_len x batch_size x 1 x 1
+        loss = []
+        scores = []
+        target = []
+        norms = []
+        seq_len = output.size(0)
+
+        new2canon = kwargs['new2canon'].squeeze(-1).squeeze(-1) # n_seq x bs
+        batch_size = int(new2canon.size(1) / self.opt.n_smiles_aug)
+        ind_even = np.arange(batch_size) * 2
+        ind_odd = ind_even + 1
+        new2canon_even = new2canon[:, ind_even] # seq_len x batch_size
+        new2canon_odd = new2canon[:, ind_odd] # seq_len x batch_size
+        odd2even = ((new2canon_even.unsqueeze(1) ==
+                new2canon_odd.unsqueeze(0)) & (new2canon_even.unsqueeze(1) !=
+                    -1) & (new2canon_odd.unsqueeze(0) != -1)).long().argmax(1)
+        # seq_len x batch_size
+        odd2even[new2canon_even == -1] = 0
+        normed_output = output / torch.norm(output, dim=-1, keepdim=True)
+        normed_output_even = normed_output[:, ind_even]
+        normed_output_odd = normed_output[:, ind_odd]
+        token_sim_all = (normed_output_even.unsqueeze(1) *
+                normed_output_odd[odd2even.detach().cpu().numpy(),
+                    np.arange(batch_size)].unsqueeze(0)).sum(-1) # seq x seq x bs
+        seq_len = token_sim_all.size(0)
+        #token_sim_all[np.arange(seq_len), np.arange(seq_len)] = -np.inf
+        ind_seq, ind_batch = (new2canon_even == -1).nonzero(as_tuple=True)
+        #token_sim_all[ind_seq, :, ind_batch] = -np.inf
+        token_sim_all[:, ind_seq, ind_batch] = -np.inf
+        token_sim_logsoftmax = F.log_softmax(token_sim_all/0.5, dim=1)
+        token_sim_logsoftmax = token_sim_logsoftmax.transpose(1, 2) # seq x bs x seq
+        token_sim_target = torch.arange(seq_len).view(-1, 1).repeat((1,
+            batch_size)).cuda()
+        token_sim_target[new2canon_even == -1] = -1
+        #print(token_sim_target[:, 0])
+        #print(token_sim_logsoftmax[:, 0].exp())
+        token_sim_loss = self.criterion[1](token_sim_logsoftmax.transpose(1, 2), token_sim_target)
+        #print(token_sim_loss[:, 0])
+        #input()
+
+        loss.append(token_sim_loss.sum())
+        scores.append(token_sim_logsoftmax.detach())
+        target.append(token_sim_target.detach())
+        norms.append(batch_size)
+
+        #print(token_sim_all[:, :, 0])
+        #negative_token_sim, _ = token_sim_all.max(1) # seq x bs
+        #negative_token_sim[ind_seq, ind_batch] = 0
+        #print(negative_token_sim[:, 0])
+
+
+        #token_sim = (normed_output_even * normed_output_odd[odd2even.detach().cpu().numpy(),
+        #        np.arange(batch_size)]).sum(-1) # seq_len x batch_size
+        #target.append((new2canon_even != -1).float().detach())
+        #norms.append(token_sim.size(1))#target[-1].sum().item())
+        #token_sim = token_sim * (new2canon_even != -1).float()
+        #print(token_sim[:, 0])
+        #input()
+        #scores.append(token_sim.detach())
+        #token_sim_loss = (token_sim - 1).pow(2) * (new2canon_even != -1).float()
+        #loss.append(token_sim_loss.sum())
+
+        #negative_token_sim_loss = F.relu(negative_token_sim - 0.5).pow(2)
+        #loss.append(negative_token_sim_loss.sum())
+        #norms.append(negative_token_sim_loss.size(1))
+        #scores.append(negative_token_sim.detach())
+        #target.append(torch.zeros_like(scores[-1]))
+
+        if self.opt.pretrain_neighbor:
+            adj = kwargs['adj']
+            khop = kwargs['khop']
+            #print(adj[:,0].long().detach().cpu().numpy())
+            #print()
+            #print(khop[:, 0].long().detach().cpu().numpy())
+            #input()
+            assert adj is not None
+            target.append(adj)
+            target.append(khop)
+            rel = torch.cat((output.unsqueeze(1).repeat(1, seq_len, 1, 1),
+                       output.unsqueeze(0).repeat(seq_len, 1, 1, 1)), dim=-1)
+            # seq_len x seq_len x batch_size x 2*model_dim
+            is_neighbor_pred = self.generator['adj'](rel).transpose(1, 2)
+            khop_pred = self.generator['khop'](rel).transpose(1, 2)
+            scores.append(is_neighbor_pred.detach())
+            scores.append(khop_pred.detach())
+            neighbor_loss = self.criterion[1](is_neighbor_pred.permute(0, 3, 1,
+                2),
+                    adj.long())
+            #neighbor_loss = (adj != -1).float() * neighbor_loss
+            khop_loss = self.criterion[1](khop_pred.permute(0, 3, 1, 2),
+                    khop.long())
+            loss.append(neighbor_loss.sum())
+            loss.append(khop_loss.sum())
+            norms.append(adj.ne(-1).float().sum().item())
+            norms.append(khop.ne(-1).float().sum().item())
+
+        if self.opt.pretrain_attr:
+            for feat_name in ['valence', 'degree', 'atomic', 'is_aromatic',
+                'num_h', 'formal_charge']:
+                if kwargs[feat_name] is not None:
+                    target_ = kwargs[feat_name].squeeze(-1).squeeze(-1)
+                    target.append(target_.detach())
+                    pred = self.generator[feat_name](output)
+                    scores.append(pred.detach())
+                    attr_loss = self.criterion[1](pred.transpose(1, 2),
+                            target_.long())
+                    loss.append(attr_loss.sum())
+                    norms.append(attr_loss.size(1))
+
+        if self.opt.contrastive:
+            mol_repr = kwargs['mol_repr']
+            assert mol_repr is not None
+            n_smiles_aug = self.opt.n_smiles_aug
+            assert n_smiles_aug == 2
+            z = self.generator['contrastive'](mol_repr)
+            batch_size = z.shape[0]
+            batch_size = batch_size // n_smiles_aug
+            z_norm = z / torch.norm(z, dim=-1, keepdim=True)
+            sim = (z_norm.unsqueeze(0) * z_norm.unsqueeze(1)).sum(-1) #/ 0.1
+            sim = sim / 0.1
+            sim[np.arange(batch_size*2), np.arange(batch_size*2)] = -np.inf
+            scores.append(sim.detach())
+            log_softmax = F.log_softmax(sim, dim=-1)#.softmax(-1).log()
+            target_ = torch.arange(batch_size).repeat_interleave(2) * 2
+            target_[np.arange(batch_size)*2] += 1
+            target.append(target_.detach().cuda())
+            target_ = target_.numpy()
+            nll = -log_softmax[np.arange(batch_size * n_smiles_aug), target_]
+            loss.append(nll.sum())
+            norms.append(nll.size(0))
+
+        stats = self._stats([l.detach().cpu().item() for l in loss], scores, target, n_latent=n_latent)
+        # TODO normalize loss here
+        normalized_loss = 0
+        for l, n in zip(loss, norms):
+            normalized_loss = normalized_loss + (l / n)
+        loss = normalized_loss
+        return loss, stats
+
+    def _stats(self, loss, scores, target, n_latent=1):
+        """
+        Args:
+            loss (:obj:`FloatTensor`): the loss computed by the loss criterion.
+            scores (:obj:`FloatTensor`): a score for each possible output
+            target (:obj:`FloatTensor`): true targets
+
+        Returns:
+            :obj:`onmt.utils.Statistics` : statistics for this batch.
+        """
+        if not isinstance(loss, list):
+            loss = [loss]
+        if not isinstance(scores, list):
+            scores = [scores]
+        if not isinstance(target, list):
+            target = [target]
+
+        num_non_padding = []
+        num_correct = []
+        for loss_, scores_, target_ in zip(loss, scores, target):
+            if scores_.shape == target_.shape:
+                pred = scores_ > 0.5
+                non_padding = target_.ne(-1)
+                target_ = target_ > 0.5
+            else:
+                pred = scores_.max(-1)[1]
+                non_padding = target_.ne(-1)
+            num_correct.append(pred.eq(target_).masked_select(non_padding).sum().item())
+            num_non_padding.append(non_padding.sum().item())
+        loss = np.array(loss)
+        num_non_padding = np.array(num_non_padding)
+        num_correct = np.array(num_correct)
+        return onmt.utils.Statistics(loss, num_non_padding, num_correct,
+                                     n_latent=n_latent)
+
+
+class BinaryClfLossCompute(LossComputeBase):
+    """
+    Standard NMT Loss Computation.
+    """
+
+    def __init__(self, criterion, generator,# normalization="sents",
+                 opt=None):
+        super(BinaryClfLossCompute, self).__init__(criterion, generator)
+        self.opt = opt
+
+    def _make_shard_state(self, batch, output, range_, attns=None):
+        shard_state = {
+            "output": output,
+            "tgt": batch.tgt,
+        }
+        return shard_state
+
+    def _compute_loss(self, batch, output, tgt,
+                      coverage_attn=None, n_latent=1, **kwargs):
+        # output: batch_size x model_dim
+        # tgt: batch_size
+        logit = self.generator(output).squeeze(-1)
+        batch_size = logit.size(0)
+        loss = self.criterion(logit, tgt).sum()
+
+        stats = self._stats(loss.item(), logit.sigmoid().detach(), tgt)
+        # TODO normalize loss here
+        return loss/batch_size, stats
+
+    def _stats(self, loss, scores, target, n_latent=1):
+        """
+        Args:
+            loss (:obj:`FloatTensor`): the loss computed by the loss criterion.
+            scores (:obj:`FloatTensor`): a score for each possible output
+            target (:obj:`FloatTensor`): true targets
+
+        Returns:
+            :obj:`onmt.utils.Statistics` : statistics for this batch.
+        """
+        pred = scores > 0.5
+        target = target > 0.5
+        n_correct = pred.eq(target).sum().item()
+        num_non_padding = target.ne(-1).sum().item()
+        n_pos_pred = pred.sum().item()
+        n_pos = target.sum().item()
+        tp = ((pred == 1) & (target == 1)).sum().item()
+        num_correct = np.array([n_correct, tp, tp])
+        num = np.array([num_non_padding, n_pos_pred, n_pos])
+
+        return onmt.utils.Statistics(loss, num, num_correct,
+                score=[scores.float().cpu().numpy()],
+                target=[target.float().cpu().numpy()],
+                 n_latent=n_latent)
+
 
 
 def filter_shard_state(state, shard_size=None):

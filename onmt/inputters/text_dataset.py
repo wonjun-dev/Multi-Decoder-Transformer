@@ -38,7 +38,10 @@ class TextDataReader(DataReaderBase):
 def text_sort_key(ex):
     """Sort using the number of tokens in the sequence."""
     if hasattr(ex, "tgt"):
-        return len(ex.src[0]), len(ex.tgt[0])
+        try:
+            return len(ex.src[0]), len(ex.tgt[0])
+        except:
+            return len(ex.src[0])
     return len(ex.src[0])
 
 
@@ -117,6 +120,12 @@ class TextMultiField(RawField):
         """
 
         # batch (list(list(list))): batch_size x len(self.fields) x seq_len
+        if len(batch[0]) > 1:
+            tmp = []
+            for inst in batch:
+                for inst_ in inst:
+                    tmp.append([inst_])
+            batch = tmp
         batch_by_feat = list(zip(*batch))
         base_data = self.base_field.process(batch_by_feat[0], device=device)
         if self.base_field.include_lengths:
@@ -144,7 +153,6 @@ class TextMultiField(RawField):
                 lists of tokens/feature tags for the sentence. The output
                 is ordered like ``self.fields``.
         """
-
         return [f.preprocess(x) for _, f in self.fields]
 
     def __getitem__(self, item):

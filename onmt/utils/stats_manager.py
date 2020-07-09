@@ -2,7 +2,7 @@ import numpy as np
 
 
 class StatsManager(object):
-    def __init__(self, stat_names=['step', 'acc', 'ppl']):
+    def __init__(self, stat_names=['step', 'acc', 'ppl', 'auc', 'xent']):
         self.stat_names = stat_names
         self.train_stats = {}
         self.val_stats = {}
@@ -43,14 +43,18 @@ class StatsManager(object):
             steps = self.train_stats['step']
             for idx, step in enumerate(steps):
                 acc = self.train_stats['acc'][idx]
+                auc = self.train_stats['auc'][idx]
                 ppl = self.train_stats['ppl'][idx]
+                xent = self.train_stats['xent'][idx]
 
-                train_file.write('%s,%.4f,%.4f\n' % (step, acc, ppl))
+                train_file.write('{},{},{},{},{}\n'.format(step, acc, xent, auc, ppl))
 
         with open('%s/valid_stats.csv' % output_dir, 'w+') as valid_file:
             steps = self.val_stats['step']
             for idx, step in enumerate(steps):
                 acc = self.val_stats['acc'][idx]
+                auc = self.val_stats['auc'][idx]
                 ppl = self.val_stats['ppl'][idx]
+                xent = self.val_stats['xent'][idx]
 
-                valid_file.write('%s,%.4f,%.4f\n' % (step, acc, ppl))
+                valid_file.write('{},{},{},{},{}\n'.format(step, acc, xent, auc, ppl))
