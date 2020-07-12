@@ -6,13 +6,15 @@ class StatsManager(object):
         self.stat_names = stat_names
         self.train_stats = {}
         self.val_stats = {}
+        self.test_stats = {}
 
         for name in stat_names:
             self.train_stats[name] = []
             self.val_stats[name] = []
+            self.test_stats[name] = []
 
-    def add_stats(self, train_stats=None, valid_stats=None):
-        assert train_stats is not None or valid_stats is not None
+    def add_stats(self, train_stats=None, valid_stats=None, test_stats=None):
+        assert train_stats is not None or valid_stats is not None or test_stats is not None
 
         if train_stats is not None:
             for name, val in train_stats.items():
@@ -22,6 +24,11 @@ class StatsManager(object):
         if valid_stats is not None:
             for name, val in valid_stats.items():
                 self.val_stats[name].append(val)
+            return
+
+        if test_stats is not None:
+            for name, val in test_stats.items():
+                self.test_stats[name].append(val)
 
     def get_best_model(self, stat_name='acc', highest_best=True):
         stat_list = np.array(self.val_stats[stat_name])[:]
@@ -42,19 +49,29 @@ class StatsManager(object):
         with open('%s/train_stats.csv' % output_dir, 'w+') as train_file:
             steps = self.train_stats['step']
             for idx, step in enumerate(steps):
-                acc = self.train_stats['acc'][idx]
-                auc = self.train_stats['auc'][idx]
-                ppl = self.train_stats['ppl'][idx]
-                xent = self.train_stats['xent'][idx]
+                acc = self.train_stats['acc'][idx] if 'acc' in self.train_stats else 0
+                auc = self.train_stats['auc'][idx] if 'auc' in self.train_stats else 0
+                ppl = self.train_stats['ppl'][idx] if 'ppl' in self.train_stats else 0
+                xent = self.train_stats['xent'][idx] if 'xent' in self.train_stats else 0
 
                 train_file.write('{},{},{},{},{}\n'.format(step, acc, xent, auc, ppl))
 
         with open('%s/valid_stats.csv' % output_dir, 'w+') as valid_file:
             steps = self.val_stats['step']
             for idx, step in enumerate(steps):
-                acc = self.val_stats['acc'][idx]
-                auc = self.val_stats['auc'][idx]
-                ppl = self.val_stats['ppl'][idx]
-                xent = self.val_stats['xent'][idx]
+                acc = self.val_stats['acc'][idx] if 'acc' in self.val_stats else 0
+                auc = self.val_stats['auc'][idx] if 'auc' in self.val_stats else 0
+                ppl = self.val_stats['ppl'][idx] if 'ppl' in self.val_stats else 0
+                xent = self.val_stats['xent'][idx] if 'xent' in self.val_stats else 0
 
                 valid_file.write('{},{},{},{},{}\n'.format(step, acc, xent, auc, ppl))
+
+        with open('%s/test_stats.csv' % output_dir, 'w+') as test_file:
+            steps = self.test_stats['step']
+            for idx, step in enumerate(steps):
+                acc = self.test_stats['acc'][idx] if 'acc' in self.test_stats else 0
+                auc = self.test_stats['auc'][idx] if 'auc' in self.test_stats else 0
+                ppl = self.test_stats['ppl'][idx] if 'ppl' in self.test_stats else 0
+                xent = self.test_stats['xent'][idx] if 'xent' in self.test_stats else 0
+
+                test_file.write('{},{},{},{},{}\n'.format(step, acc, xent, auc, ppl))

@@ -143,7 +143,8 @@ class BinaryClfTrainer(object):
               train_steps,
               save_checkpoint_steps=5000,
               valid_iter=None,
-              valid_steps=10000):
+              valid_steps=10000,
+              test_iter=None):
         """
         The main training loop by iterating over `train_iter` and possibly
         running validation on `valid_iter`.
@@ -237,6 +238,20 @@ class BinaryClfTrainer(object):
                     # If the patience has reached the limit, stop training
                     if self.earlystopper.has_stopped():
                         break
+
+                if test_iter is not None:
+                    test_stats = self.validate(test_iter,
+                            moving_average=self.moving_average)
+                    test_stats = self._maybe_gather_stats(test_stats)
+                    self._report_step(self.optim.learning_rate(),
+                                  step, test_stats=test_stats)
+                    stats_manager.add_stats(
+                        test_stats={'step': step,
+                                    'acc': test_stats.accuracy(),
+                                    'auc': test_stats.auc(),
+                                    'ppl': test_stats.ppl(),
+                                    'xent': test_stats.xent()})
+
 
             if (self.model_saver is not None
                 and (save_checkpoint_steps != 0
@@ -378,7 +393,7 @@ class BinaryClfTrainer(object):
                 multigpu=self.n_gpu > 1)
 
     def _report_step(self, learning_rate, step, train_stats=None,
-                     valid_stats=None):
+                     valid_stats=None, test_stats=None):
         """
         Simple function to report stats (if report_manager is set)
         see `onmt.utils.ReportManagerBase.report_step` for doc
@@ -386,7 +401,7 @@ class BinaryClfTrainer(object):
         if self.report_manager is not None:
             return self.report_manager.report_step(
                 learning_rate, step, train_stats=train_stats,
-                valid_stats=valid_stats)
+                valid_stats=valid_stats, test_stats=test_stats)
 
 
 

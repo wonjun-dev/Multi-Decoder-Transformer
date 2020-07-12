@@ -79,7 +79,6 @@ def main(opt, device_id, batch_queue=None, semaphore=None):
         model_opt.dropout = opt.dropout
         model_opt.early_stopping = opt.early_stopping
         print(model_opt.learning_rate)
-        input()
         ArgumentParser.update_model_opts(model_opt)
         ArgumentParser.validate_model_opts(model_opt)
         logger.info('Loading vocab from checkpoint at %s.' % opt.train_from)
@@ -125,7 +124,6 @@ def main(opt, device_id, batch_queue=None, semaphore=None):
 
     # Build optimizer.
     print(opt.learning_rate)
-    input()
     optim = Optimizer.from_opt(model, opt)#, checkpoint=checkpoint)
 
     # Build model saver
@@ -167,6 +165,7 @@ def main(opt, device_id, batch_queue=None, semaphore=None):
         train_iter = _train_iter()
 
     valid_iter = build_dataset_iter("valid", fields, opt, is_train=False)
+    test_iter = build_dataset_iter("test", fields, opt, is_train=False)
 
     if len(opt.gpu_ranks):
         logger.info('Starting training on GPU: %s' % opt.gpu_ranks)
@@ -176,7 +175,16 @@ def main(opt, device_id, batch_queue=None, semaphore=None):
     if opt.single_pass and train_steps > 0:
         logger.warning("Option single_pass is enabled, ignoring train_steps.")
         train_steps = 0
-    total_stats, stats_manager = trainer.train(
+    try:
+        total_stats, stats_manager = trainer.train(
+            train_iter,
+            train_steps,
+            save_checkpoint_steps=opt.save_checkpoint_steps,
+            valid_iter=valid_iter,
+            valid_steps=opt.valid_steps,
+            test_iter=test_iter)
+    except:
+        total_stats, stats_manager = trainer.train(
             train_iter,
             train_steps,
             save_checkpoint_steps=opt.save_checkpoint_steps,

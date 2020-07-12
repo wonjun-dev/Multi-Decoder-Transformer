@@ -13,21 +13,21 @@ seed=$2
 for l in ${latent[@]}; do
     for p in ${dropout[@]}; do
         # Train
-        CUDA_VISIBLE_DEVICES="${device}" python  train.py -data data/${dataset}/${dataset} \
-                -save_model experiments/${dataset}_${model_name}_${l}_${p}_${seed} \
-                -gpu_ranks 0 -save_checkpoint_steps 1000  -keep_checkpoint 16 \
-                -train_steps 200000 -valid_steps 1000 -report_every 1000 -param_init 0  -param_init_glorot \
-                -batch_size 32 -batch_type sents -normalization sents -max_grad_norm 0  -accum_count 4 \
-                -optim adam -adam_beta1 0.9 -adam_beta2 0.998 -decay_method noam -warmup_steps 8000  \
-                -learning_rate 2 -label_smoothing 0.0 \
-                -layers 6 -rnn_size 256 -word_vec_size 256 -encoder_type transformer -decoder_type transformer \
-                -pool_factor 4 \
-                -early_stopping_criteria accuracy ppl \
-                -dropout "${p}" -position_encoding -share_embeddings \
-                -train_from experiments/chembl_lm_pretrain_neighbor_attr_contrastive_toksim-6-2048-256-0.1_0_0.1_2022/models/model_step_187000.pt \
-                -world_size=1 -seed "${seed}" -early_stopping 15 -n_latent "${l}" \
-                -n_smiles_aug=1 \
-                -heads 8 -transformer_ff 2048 #-tensorboard -tensorboard_log_dir runs/${dataset}_${model_name}
+        #CUDA_VISIBLE_DEVICES="${device}" python  train.py -data data/${dataset}/${dataset} \
+        #        -save_model experiments/${dataset}_${model_name}_${l}_${p}_${seed} \
+        #        -gpu_ranks 0 -save_checkpoint_steps 1000  -keep_checkpoint 16 \
+        #        -train_steps 200000 -valid_steps 1000 -report_every 1000 -param_init 0  -param_init_glorot \
+        #        -batch_size 32 -batch_type sents -normalization sents -max_grad_norm 0  -accum_count 4 \
+        #        -optim adam -adam_beta1 0.9 -adam_beta2 0.998 -decay_method noam -warmup_steps 8000  \
+        #        -learning_rate 2 -label_smoothing 0.0 \
+        #        -layers 6 -rnn_size 256 -word_vec_size 256 -encoder_type transformer -decoder_type transformer \
+        #        -pool_factor 4 \
+        #        -early_stopping_criteria accuracy ppl \
+        #        -dropout "${p}" -position_encoding -share_embeddings \
+        #        -world_size=1 -seed "${seed}" -early_stopping 15 -n_latent "${l}" \
+        #        -n_smiles_aug=1 \
+        #        -heads 8 -transformer_ff 2048 #-tensorboard -tensorboard_log_dir runs/${dataset}_${model_name}
+                #-train_from experiments/chembl_lm_pretrain_neighbor_attr_contrastive_toksim-6-2048-256-0.1_0_0.1_2022/models/model_step_187000.pt \
 
         # Translate
         summ_path=experiments/${dataset}_${model_name}_${l}_${p}_${seed}/summary.txt
@@ -46,6 +46,7 @@ for l in ${latent[@]}; do
             fi
         done < ${summ_path}
         echo $best_model_path
+        best_model_path=experiments/USPTO-50k_no_rxn_mt_0_0.25_2020/models/model_step_35000.pt
         CUDA_VISIBLE_DEVICES=${device} python translate.py -model ${best_model_path} -src data/${dataset}/src-test.txt -output_dir experiments/${dataset}_${model_name}_${l}_${p}_${seed}/preds/ -beam_size=50 -gpu 0 -batch_size=20 -n_best=50 -log_probs -n_translate_latent ${l}
         # CUDA_VISIBLE_DEVICES=${device} python translate.py -model ${best_model_path} -src data/${dataset}/src-test-dummy.txt -output_dir experiments/${dataset}_${model_name}_${l}_${p}_${seed}/preds_dummy/ -beam_size=10 -gpu 0 -batch_size=100 -n_best=10 -log_probs -n_translate_latent ${l}
 

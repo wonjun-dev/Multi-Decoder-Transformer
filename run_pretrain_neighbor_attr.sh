@@ -15,10 +15,10 @@ for l in ${latent[@]}; do
     for p in ${dropout[@]}; do
         # Train
         model_name_=${model_name}-${p}
-        CUDA_VISIBLE_DEVICES="${device}" python  train.py -data data/${dataset}/${dataset}-merge \
+        CUDA_VISIBLE_DEVICES="${device}" python  train.py -data data/${dataset}/${dataset}-merge2 \
                 -save_model experiments/${dataset}_${model_name_}_${l}_${p}_${seed} \
                 -gpu_ranks 0 -save_checkpoint_steps 1000  -keep_checkpoint 16 \
-                -train_steps 500000 -valid_steps 1000 -report_every 1000 -param_init 0  -param_init_glorot \
+                -train_steps 1000000 -valid_steps 1000 -report_every 1000 -param_init 0  -param_init_glorot \
                 -batch_size 16 -batch_type sents -normalization sents \
                 -max_generator_batches 0 \
                 -max_grad_norm 0  -accum_count 1 \

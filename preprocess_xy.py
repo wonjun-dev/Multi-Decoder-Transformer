@@ -36,16 +36,20 @@ def check_existing_pt_files(opt):
 
 
 def build_save_dataset(corpus_type, fields, src_reader, opt):
-    assert corpus_type in ['train', 'valid']
+    assert corpus_type in ['train', 'valid', 'test']
 
     if corpus_type == 'train':
         counters = defaultdict(Counter)
         srcs = opt.train_src
         tgts = opt.train_tgt   # file path ( *.npy)
         ids = opt.train_ids
-    else:
+    elif corpus_type == 'valid':
         srcs = [opt.valid_src]
         tgts = [opt.valid_tgt]
+        ids = [None]
+    else: # corpus_type == 'test':
+        srcs = [opt.test_src]
+        tgts = [opt.test_tgt]
         ids = [None]
 
     for src, tgt, maybe_id in zip(srcs, tgts, ids):
@@ -238,6 +242,11 @@ def main(opt):
         opt.contrastive = False
         logger.info("Building & saving validation data...")
         build_save_dataset('valid', fields, src_reader, opt)
+
+    if opt.test_src and opt.test_tgt:
+        opt.contrastive = False
+        logger.info("Building & saving validation data...")
+        build_save_dataset('test', fields, src_reader, opt)
 
 
 def _get_parser():

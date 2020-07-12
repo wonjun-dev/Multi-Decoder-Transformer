@@ -176,7 +176,6 @@ def build_base_model(model_opt, fields, gpu, checkpoint=None, gpu_id=None,
         if model_opt.binary_clf:
             print(model_opt.n_gen_layer)
             print(model_opt.n_smiles_aug)
-            input()
             layers = []
             in_dim = model_opt.dec_rnn_size
             out_dim = model_opt.dec_rnn_size

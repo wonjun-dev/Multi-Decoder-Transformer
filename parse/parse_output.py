@@ -78,7 +78,8 @@ def match_smiles_lists(pred_list,
 
             # Increment if not yet matched beam and the pred set matches
             if set_matched and not beam_matched:
-                n_matched[beam_idx - num_invalid - num_repeat] += 1
+                #n_matched[beam_idx - num_invalid - num_repeat] += 1
+                n_matched[beam_idx] += 1
                 beam_matched = True
 
     if should_print:

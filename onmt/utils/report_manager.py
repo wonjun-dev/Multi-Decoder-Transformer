@@ -85,7 +85,8 @@ class ReportMgrBase(object):
         """ To be overridden """
         raise NotImplementedError()
 
-    def report_step(self, lr, step, train_stats=None, valid_stats=None):
+    def report_step(self, lr, step, train_stats=None, valid_stats=None,
+            test_stats=None):
         """
         Report stats of a step
 
@@ -95,7 +96,8 @@ class ReportMgrBase(object):
             lr(float): current learning rate
         """
         self._report_step(
-            lr, step, train_stats=train_stats, valid_stats=valid_stats)
+            lr, step, train_stats=train_stats, valid_stats=valid_stats,
+            test_stats=test_stats)
 
     def _report_step(self, *args, **kwargs):
         raise NotImplementedError()
@@ -138,7 +140,8 @@ class ReportMgr(ReportMgrBase):
 
         return report_stats
 
-    def _report_step(self, lr, step, train_stats=None, valid_stats=None):
+    def _report_step(self, lr, step, train_stats=None, valid_stats=None,
+            test_stats=None):
         """
         See base class method `ReportMgrBase.report_step`.
         """
@@ -161,5 +164,16 @@ class ReportMgr(ReportMgrBase):
 
             self.maybe_log_tensorboard(valid_stats,
                                        "valid",
+                                       lr,
+                                       step)
+
+        if test_stats is not None:
+            self.log('Test perplexity: {}'.format(test_stats.ppl()))
+            self.log('Test accuracy: {}'.format(test_stats.accuracy()))
+            self.log('Test auc: {}'.format(test_stats.auc()))
+            self.log('Test xent: {}'.format(test_stats.xent()))
+
+            self.maybe_log_tensorboard(test_stats,
+                                       "test",
                                        lr,
                                        step)
